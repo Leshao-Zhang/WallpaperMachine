@@ -378,9 +378,16 @@ def install_footer(version, target=None, built_from=None):
     not the bump commit the tag points at. This line is checkable —
     `git rev-parse <tag>^{commit}` must equal it.
     """
-    image = dmg.image_name(display_version(version))
+    architecture = dmg.disk_image_architecture()
+    image = dmg.image_name(display_version(version), architecture)
     tag = f"v{display_version(version)}"
-    requirement = f"Apple silicon (arm64), macOS {target} or later." if target else "Apple silicon (arm64)."
+    labels = {
+        "arm64": "Apple silicon (arm64)",
+        "x86_64": "Intel (x86_64)",
+        "universal": "Apple silicon (arm64) and Intel (x86_64)",
+    }
+    label = labels[architecture]
+    requirement = f"{label}, macOS {target} or later." if target else f"{label}."
     lines = [
         NOTES_END,
         "",

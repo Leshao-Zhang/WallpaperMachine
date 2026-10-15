@@ -333,7 +333,8 @@ artifact.
    layout, then writes the `.sha256` sidecar
    ([build.md](build.md#packaging-and-installing));
 6. matches the image to the tag: it must be named
-   `WallpaperMachine-<tag without v>-arm64.dmg`, and its checksum is echoed into the
+   `WallpaperMachine-<tag without v>-<arch>.dmg` (`arm64` or `x86_64`, from `uname -m`
+   on the build runner), and its checksum is echoed into the
    job summary;
 7. hands the image, its sidecar and the notes to `publish` as the
    `release-<tag>` artifact.
@@ -510,11 +511,12 @@ What a release must satisfy:
   redirect, so never create a repository at that old path;
 - the release is not a draft or prerelease, and its tag is `vx.y.z` (no
   prerelease suffixes, no `nightly`);
-- the disk image is named exactly `WallpaperMachine-<x.y.z>-arm64.dmg` — what
-  `AppUpdateConfiguration.assetName(for:)` returns and what `scripts/package.py`
-  produces (`image_name` in `scripts/lib/dmg.py`). The app can fall back to another
-  product `.dmg`, but never downloads the `.sha256` sidecar, zips, feeds or
-  blockmaps;
+- the disk image is named exactly `WallpaperMachine-<x.y.z>-arm64.dmg` or
+  `WallpaperMachine-<x.y.z>-x86_64.dmg` (a universal image uses `-universal`) — what
+  `AppUpdateConfiguration.assetName(for:)` returns for the running Mac and what
+  `scripts/package.py` produces (`image_name` in `scripts/lib/dmg.py`). The app
+  selects the image for its own architecture. It never downloads the `.sha256`
+  sidecar, zips, feeds or blockmaps;
 - the manifest's asset carries a `sha256:` digest of the image and a
   `browser_download_url` on github.com, both derived by `update_manifest.py`; the
   app refuses an image it cannot verify;
@@ -558,7 +560,8 @@ use the preceding tag.
    then `### 简体中文`, and the model wrote both. The app bundles both translations;
    the GitHub release page shows only the English notes.
 3. Confirm the called Build run passed the test gate, verified the mounted
-   image, and published `WallpaperMachine-x.y.z-arm64.dmg` with its `.sha256`
+   image, and published `WallpaperMachine-x.y.z-arm64.dmg` or
+   `WallpaperMachine-x.y.z-x86_64.dmg` with its `.sha256`
    sidecar, `WallpaperMachine-update.json` and a provenance attestation. The
    manifest's `digest` must equal the sidecar's checksum:
    `curl -sL https://github.com/WallpaperMachine/WallpaperMachine/releases/latest/download/WallpaperMachine-update.json`.

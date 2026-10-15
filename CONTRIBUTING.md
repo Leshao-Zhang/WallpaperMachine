@@ -12,7 +12,7 @@ Discussions Q&A.
 
 ## Setup
 
-Apple Silicon, macOS 15.6 or later, and a full Xcode 26 selected with
+An Apple silicon or Intel Mac, macOS 15.6 or later, and a full Xcode 26 selected with
 `xcode-select`. Install the Homebrew packages and the project's LGPL FFmpeg that
 [docs/build.md](docs/build.md#prerequisites) lists, then:
 

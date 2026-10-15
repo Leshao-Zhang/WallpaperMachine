@@ -2977,7 +2977,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
-				ARCHS = arm64;
+				ARCHS = "$(NATIVE_ARCH_ACTUAL)";
+				HOMEBREW_PREFIX = /opt/homebrew;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -3057,16 +3058,30 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(SRCROOT)/upstream/renderer/target/release",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
+					"$(HOMEBREW_PREFIX)/opt/glslang/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
+					/usr/local/opt/glslang/lib,
 				);
 				MARKETING_VERSION = 1.4.1;
 				OTHER_LDFLAGS = (
@@ -3224,16 +3239,30 @@
 				INFOPLIST_FILE = App/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(SRCROOT)/upstream/renderer/target/release",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
+					"$(HOMEBREW_PREFIX)/opt/glslang/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
+					/usr/local/opt/glslang/lib,
 				);
 				MARKETING_VERSION = 1.4.1;
 				OTHER_LDFLAGS = (
@@ -3294,16 +3323,30 @@
 				INFOPLIST_FILE = App/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(SRCROOT)/upstream/renderer/target/release",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
+					"$(HOMEBREW_PREFIX)/opt/glslang/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
+					/usr/local/opt/glslang/lib,
 				);
 				MARKETING_VERSION = 1.4.1;
 				OTHER_LDFLAGS = (
@@ -3365,16 +3408,30 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(SRCROOT)/upstream/renderer/target/release",
+					"$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib",
+					"$(HOMEBREW_PREFIX)/lib",
+					"$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib",
+					"$(HOMEBREW_PREFIX)/opt/glslang/lib",
 					"/opt/homebrew/opt/mwe-ffmpeg/lib",
 					/opt/homebrew/lib,
 					"/opt/homebrew/opt/quickjs-ng/lib",
 					/opt/homebrew/opt/glslang/lib,
+					"/usr/local/opt/mwe-ffmpeg/lib",
+					/usr/local/lib,
+					"/usr/local/opt/quickjs-ng/lib",
+					/usr/local/opt/glslang/lib,
 				);
 				MARKETING_VERSION = 1.4.1;
 				OTHER_LDFLAGS = (
@@ -3447,7 +3504,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
-				ARCHS = arm64;
+				ARCHS = "$(NATIVE_ARCH_ACTUAL)";
+				HOMEBREW_PREFIX = /opt/homebrew;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";

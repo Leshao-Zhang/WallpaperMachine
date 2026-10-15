@@ -172,6 +172,10 @@ def main():
         # the app-icon name actool would otherwise look for in the catalog.
         settings = [f"EXCLUDED_SOURCE_FILE_NAMES={APP_ICON.name}", "ASSETCATALOG_COMPILER_APPICON_NAME="]
     settings += args.xcode_setting
+    # project.yml also lists /opt/homebrew and /usr/local. Putting the prefix
+    # this Mac's Homebrew actually uses first selects the matching libraries
+    # when both trees exist (an Apple silicon Mac with a Rosetta Homebrew).
+    settings.append("HOMEBREW_PREFIX=" + subprocess.check_output(["brew", "--prefix"], text=True).strip())
     run(["xcodebuild", "-project", XCODEPROJ.name, "-scheme", "WallpaperMachine", "-configuration", args.configuration, "-derivedDataPath", BUILD, "build", *settings], env=env, stage=f"xcodebuild-{args.configuration}")
     if compiled_icon:
         install_app_icon(app_bundle(args.configuration), compiled_icon)

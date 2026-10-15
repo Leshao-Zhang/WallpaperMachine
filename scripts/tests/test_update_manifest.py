@@ -52,6 +52,13 @@ class UpdateManifestTests(unittest.TestCase):
         self.assertEqual(asset["size"], self.image.stat().st_size)
         self.assertEqual(asset["digest"], "sha256:" + hashlib.sha256(self.image.read_bytes()).hexdigest())
 
+    def test_an_intel_image_is_published_beside_the_apple_silicon_one(self):
+        intel = self.root / "WallpaperMachine-1.4.0-x86_64.dmg"
+        intel.write_bytes(b"intel disk image")
+        content = update_manifest.manifest("v1.4.0", "owner/app", self.notes, [self.image, intel])
+        self.assertEqual([asset["name"] for asset in content["assets"]],
+                         ["WallpaperMachine-1.4.0-arm64.dmg", "WallpaperMachine-1.4.0-x86_64.dmg"])
+
     def test_image_of_another_version_is_refused(self):
         other = self.root / "WallpaperMachine-1.3.9-arm64.dmg"
         other.write_bytes(b"older")

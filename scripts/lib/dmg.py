@@ -15,10 +15,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import platform
 import plistlib
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import unicodedata
@@ -54,9 +56,50 @@ class DiskImageError(Exception):
     """A condition that stops building or verifying the image; the message is the whole report."""
 
 
-def image_name(version):
-    """The published asset: what `scripts/package.py` writes and the in-app updater selects."""
-    return f"WallpaperMachine-{version}-arm64.dmg"
+def image_architecture(architectures):
+    """`universal` when both macOS slices are present, otherwise the single slice.
+
+    An empty list is the historical Apple silicon package. Callers that have not
+    inspected a binary, including release-note tests on Linux, stay on that name.
+    """
+    found = [arch for arch in architectures if arch in {"arm64", "x86_64"}]
+    if set(found) >= {"arm64", "x86_64"}:
+        return "universal"
+    if found:
+        return found[0]
+    return "arm64"
+
+
+def disk_image_architecture(binary=None):
+    """Architecture token for a built app, or for the Mac running this script.
+
+    `lipo -archs` wins when `binary` exists, so a cross-built app is named for the
+    slices it contains. Without a binary, an Apple silicon or Intel Mac uses its
+    own architecture. Anywhere else the token stays `arm64`.
+    """
+    architectures = []
+    if binary is not None and Path(binary).is_file():
+        try:
+            completed = subprocess.run(["/usr/bin/lipo", "-archs", str(binary)], capture_output=True, text=True)
+        except OSError:
+            completed = None
+        if completed is not None and completed.returncode == 0:
+            architectures = completed.stdout.split()
+    if not architectures and sys.platform == "darwin":
+        architectures = [platform.machine()]
+    return image_architecture(architectures)
+
+
+def image_name(version, architecture=None):
+    """The published asset: what `scripts/package.py` writes and the in-app updater selects.
+
+    `architecture` is `arm64`, `x86_64` or `universal`. Omitting it keeps the
+    Apple silicon name, which is what existing release tooling publishes.
+    """
+    architecture = architecture or "arm64"
+    if architecture not in {"arm64", "x86_64", "universal"}:
+        raise DiskImageError(f"Unsupported disk image architecture {architecture!r}.")
+    return f"WallpaperMachine-{version}-{architecture}.dmg"
 
 
 def volume_name(version):

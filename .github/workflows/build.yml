@@ -142,7 +142,12 @@ jobs:
         run: |
           set -euo pipefail
           directory="build/Build/Products/Release"
-          name="WallpaperMachine-${TAG#v}-arm64.dmg"
+          case "$(uname -m)" in
+            arm64) arch=arm64 ;;
+            x86_64) arch=x86_64 ;;
+            *) echo "::error::Publish from an Apple silicon or Intel Mac, not $(uname -m)."; exit 1 ;;
+          esac
+          name="WallpaperMachine-${TAG#v}-${arch}.dmg"
           if [ ! -f "${directory}/${name}" ]; then
             echo "::error::No ${name} in ${directory}. scripts/package.py names the image from the built bundle's CFBundleShortVersionString, so the version bump never reached this build."
             ls -1 "${directory}"/*.dmg 2>/dev/null || true
@@ -280,7 +285,12 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          name="WallpaperMachine-${TAG#v}-arm64.dmg"
+          case "$(uname -m)" in
+            arm64) arch=arm64 ;;
+            x86_64) arch=x86_64 ;;
+            *) echo "::error::Publish from an Apple silicon or Intel Mac, not $(uname -m)."; exit 1 ;;
+          esac
+          name="WallpaperMachine-${TAG#v}-${arch}.dmg"
           {
             echo "image=${RUNNER_TEMP}/release/${name}"
             echo "checksum=${RUNNER_TEMP}/release/${name}.sha256"

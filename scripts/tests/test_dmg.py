@@ -85,6 +85,23 @@ def png(path, width, height):
     path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
+class ImageNameTests(unittest.TestCase):
+    def test_names_follow_the_architecture_token(self):
+        self.assertEqual(dmg.image_name("1.4.1", "arm64"), "WallpaperMachine-1.4.1-arm64.dmg")
+        self.assertEqual(dmg.image_name("1.4.1", "x86_64"), "WallpaperMachine-1.4.1-x86_64.dmg")
+        self.assertEqual(dmg.image_name("1.4.1", "universal"), "WallpaperMachine-1.4.1-universal.dmg")
+        self.assertEqual(dmg.image_name("1.4.1"), "WallpaperMachine-1.4.1-arm64.dmg")
+
+    def test_both_slices_publish_as_universal(self):
+        self.assertEqual(dmg.image_architecture(["x86_64", "arm64"]), "universal")
+        self.assertEqual(dmg.image_architecture(["x86_64"]), "x86_64")
+        self.assertEqual(dmg.image_architecture([]), "arm64")
+
+    def test_an_unknown_architecture_is_refused(self):
+        with self.assertRaises(dmg.DiskImageError):
+            dmg.image_name("1.4.1", "i386")
+
+
 class LayoutRecordTests(unittest.TestCase):
     def test_records_are_stored_in_finders_lookup_order(self):
         records = [

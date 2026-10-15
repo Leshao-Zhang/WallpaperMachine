@@ -14,7 +14,11 @@ settings:
     CODE_SIGN_STYLE: Manual
     ENABLE_HARDENED_RUNTIME: NO
     DEVELOPMENT_TEAM: ""
-    ARCHS: arm64
+    # The Mac doing the build. Apple silicon produces arm64, Intel produces x86_64.
+    # ONLY_ACTIVE_ARCH keeps a universal SDK from also compiling the other slice
+    # against Homebrew libraries that exist for only one architecture.
+    ARCHS: "$(NATIVE_ARCH_ACTUAL)"
+    HOMEBREW_PREFIX: /opt/homebrew
     ONLY_ACTIVE_ARCH: YES
     ENABLE_DEBUG_DYLIB: NO
 targets:
@@ -94,16 +98,30 @@ targets:
           - "$(SRCROOT)/upstream/renderer/external/open-wallpaper-engine/src/Platform/Apple"
         LIBRARY_SEARCH_PATHS: &rendererLibraryPaths
           - "$(SRCROOT)/upstream/renderer/target/release"
+          - "$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib"
+          - "$(HOMEBREW_PREFIX)/lib"
+          - "$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib"
+          - "$(HOMEBREW_PREFIX)/opt/glslang/lib"
           - /opt/homebrew/opt/mwe-ffmpeg/lib
           - /opt/homebrew/lib
           - /opt/homebrew/opt/quickjs-ng/lib
           - /opt/homebrew/opt/glslang/lib
+          - /usr/local/opt/mwe-ffmpeg/lib
+          - /usr/local/lib
+          - /usr/local/opt/quickjs-ng/lib
+          - /usr/local/opt/glslang/lib
         OTHER_SWIFT_FLAGS: "-Xcc -fmodule-map-file=$(SRCROOT)/App/Bridge/Generated/WallpaperBridgeFFI.modulemap"
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
+          - "$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib"
+          - "$(HOMEBREW_PREFIX)/lib"
+          - "$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib"
           - /opt/homebrew/opt/mwe-ffmpeg/lib
           - /opt/homebrew/lib
           - /opt/homebrew/opt/quickjs-ng/lib
+          - /usr/local/opt/mwe-ffmpeg/lib
+          - /usr/local/lib
+          - /usr/local/opt/quickjs-ng/lib
         OTHER_LDFLAGS: &rendererLinkerFlags
           - -lwallpaper_bridge
           - -lc++
@@ -170,9 +188,15 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
           - "@executable_path/../../../../Frameworks"
+          - "$(HOMEBREW_PREFIX)/opt/mwe-ffmpeg/lib"
+          - "$(HOMEBREW_PREFIX)/lib"
+          - "$(HOMEBREW_PREFIX)/opt/quickjs-ng/lib"
           - /opt/homebrew/opt/mwe-ffmpeg/lib
           - /opt/homebrew/lib
           - /opt/homebrew/opt/quickjs-ng/lib
+          - /usr/local/opt/mwe-ffmpeg/lib
+          - /usr/local/lib
+          - /usr/local/opt/quickjs-ng/lib
         SKIP_INSTALL: YES
   WallpaperMachineTests:
     type: bundle.unit-test

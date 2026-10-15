@@ -69,9 +69,12 @@ reset time there is nothing to wait for and the next check goes out.
 A release is an update when its tag parses as `x.y.z` (a leading `v` is allowed;
 three numeric parts, no suffix such as `-beta` or `nightly`), it is not a
 prerelease and it is above the running version. The image to download is the asset
-named exactly `WallpaperMachine-<x.y.z>-arm64.dmg`
-(`AppUpdateConfiguration.assetName(for:)`), then another product disk image naming
-`arm64`, then any product disk image. Only `.dmg` assets whose name contains the
+named exactly `WallpaperMachine-<x.y.z>-<arch>.dmg`
+(`AppUpdateConfiguration.assetName(for:)`), where `<arch>` is `arm64` on Apple
+silicon and `x86_64` on Intel, then another product disk image naming that
+architecture, then a `-universal` image. An Apple silicon build still accepts an
+untagged product disk image, which is how older releases were published. An Intel
+build does not: that file may be arm64-only. Only `.dmg` assets whose name contains the
 product name qualify: the `.sha256` sidecar, zips, feeds and blockmaps are never
 downloaded. With no matching asset the app falls back to opening GitHub Releases
 for a manual update: About says the version is available from GitHub Releases and

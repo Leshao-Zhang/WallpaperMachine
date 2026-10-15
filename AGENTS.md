@@ -1,6 +1,6 @@
 # Agent rules
 
-WallpaperMachine: macOS/arm64; AppKit/SwiftUI, WKWebView panel, Rust/C++ renderer,
+WallpaperMachine: macOS (arm64 and x86_64); AppKit/SwiftUI, WKWebView panel, Rust/C++ renderer,
 sandboxed ExtensionKit lock screen. `CLAUDE.md` must stay a relative symlink to `AGENTS.md`.
 
 ## Read on demand

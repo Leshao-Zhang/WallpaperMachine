@@ -16,7 +16,7 @@
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/releases/latest"><img src="https://img.shields.io/github/v/release/WallpaperMachine/WallpaperMachine?label=version&color=0a84ff" alt="最新版本"></a>
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/actions/workflows/version.yml"><img src="https://img.shields.io/github/actions/workflow/status/WallpaperMachine/WallpaperMachine/version.yml?branch=main&label=build" alt="构建与发布状态"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/WallpaperMachine/WallpaperMachine?color=blue" alt="许可证：GPL-2.0"></a>
-  <img src="https://img.shields.io/badge/macOS_15%2B-Apple_silicon-111111?logo=apple&logoColor=white" alt="macOS 15 或更高版本，Apple 芯片">
+  <img src="https://img.shields.io/badge/macOS_15%2B-Apple_silicon_and_Intel-111111?logo=apple&logoColor=white" alt="macOS 15 或更高版本，Apple 芯片与 Intel">
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/stargazers"><img src="https://img.shields.io/github/stars/WallpaperMachine/WallpaperMachine" alt="GitHub 星标"></a>
 </p>
 
@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <sub>macOS 15 Sequoia 或更高版本&ensp;·&ensp;Apple 芯片（M1 或更新机型）&ensp;·&ensp;<a href="https://github.com/WallpaperMachine/WallpaperMachine/releases/latest">发布说明与校验和</a></sub>
+  <sub>macOS 15 Sequoia 或更高版本&ensp;·&ensp;Apple 芯片（M1 或更新机型）与 Intel&ensp;·&ensp;<a href="https://github.com/WallpaperMachine/WallpaperMachine/releases/latest">发布说明与校验和</a></sub>
 </p>
 
 <p align="center">
@@ -143,7 +143,7 @@ Wallpaper Engine 本身是为 Windows 打造的。WallpaperMachine 是一款独�
 <details>
 <summary><b>适用于哪些 Mac？</b></summary>
 
-WallpaperMachine 为搭载 Apple 芯片（M1 或更新机型）、运行 macOS 15 Sequoia 或更高版本的 Mac 打造；动态锁屏需要 macOS 26 Tahoe 或更高版本。不支持 Intel 芯片的 Mac。
+WallpaperMachine 适用于运行 macOS 15 Sequoia 或更高版本的 Mac，包括 Apple 芯片（M1 或更新机型）和 Intel。动态锁屏需要 macOS 26 Tahoe 或更高版本。Tahoe 是 Intel Mac 的最后一个 macOS 大版本，因此这项功能只覆盖 Tahoe 仍支持的 Intel 机型。
 
 </details>
 
@@ -184,7 +184,7 @@ WallpaperMachine 支持场景、视频和网页渲染。兼容性因壁纸而异
 
 ## 开源与自行构建
 
-完整源代码就在这里。构建需要搭载 Apple 芯片的 Mac、Xcode 26（macOS 15.6 或更高版本）、用 `xcode-select` 选定的完整 Xcode，以及[先决条件](docs/build.md#prerequisites)中列出的 Homebrew 软件包；渲染器和场景引擎内置在[`upstream/`](upstream) 中，而不是以子模块引入。
+完整源代码就在这里。构建需要搭载 Apple 芯片或 Intel 的 Mac、Xcode 26（macOS 15.6 或更高版本）、用 `xcode-select` 选定的完整 Xcode，以及[先决条件](docs/build.md#prerequisites)中列出的 Homebrew 软件包；渲染器和场景引擎内置在[`upstream/`](upstream) 中，而不是以子模块引入。
 
 ```sh
 python3 scripts/install_ffmpeg.py                  # 本项目的 LGPL FFmpeg 构建

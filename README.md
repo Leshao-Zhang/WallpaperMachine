@@ -19,7 +19,7 @@
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/releases/latest"><img src="https://img.shields.io/github/v/release/WallpaperMachine/WallpaperMachine?label=version&color=0a84ff" alt="Latest version"></a>
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/actions/workflows/version.yml"><img src="https://img.shields.io/github/actions/workflow/status/WallpaperMachine/WallpaperMachine/version.yml?branch=main&label=build" alt="Build and release status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/WallpaperMachine/WallpaperMachine?color=blue" alt="License: GPL-2.0"></a>
-  <img src="https://img.shields.io/badge/macOS_15%2B-Apple_silicon-111111?logo=apple&logoColor=white" alt="macOS 15 or later on Apple silicon">
+  <img src="https://img.shields.io/badge/macOS_15%2B-Apple_silicon_and_Intel-111111?logo=apple&logoColor=white" alt="macOS 15 or later on Apple silicon and Intel">
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/stargazers"><img src="https://img.shields.io/github/stars/WallpaperMachine/WallpaperMachine" alt="GitHub stars"></a>
 </p>
 
@@ -30,7 +30,7 @@
 </p>
 
 <p align="center">
-  <sub>macOS 15 Sequoia or later&ensp;·&ensp;Apple silicon (M1 or later)&ensp;·&ensp;<a href="https://github.com/WallpaperMachine/WallpaperMachine/releases/latest">Release notes and checksums</a></sub>
+  <sub>macOS 15 Sequoia or later&ensp;·&ensp;Apple silicon (M1 or later) and Intel&ensp;·&ensp;<a href="https://github.com/WallpaperMachine/WallpaperMachine/releases/latest">Release notes and checksums</a></sub>
 </p>
 
 <p align="center">
@@ -188,8 +188,9 @@ wallpaper, Aurora Drift, plays without either. More in
 <details>
 <summary><b>Which Macs is it built for?</b></summary>
 
-Macs with Apple silicon (M1 or later) running macOS 15 Sequoia or later. The
-animated lock screen needs macOS 26 Tahoe or later. Intel Macs aren't supported.
+Macs running macOS 15 Sequoia or later, on Apple silicon (M1 or later) or Intel.
+The animated lock screen needs macOS 26 Tahoe or later. Tahoe is the last macOS
+release for Intel Macs, so that feature reaches the Intel models Tahoe still supports.
 
 </details>
 
@@ -246,7 +247,7 @@ details. Security problems are reported privately: see [SECURITY.md](SECURITY.md
 
 ## Open source. Free to build.
 
-The complete source is here. It builds on a Mac with Apple silicon, Xcode 26 (macOS 15.6 or later), a
+The complete source is here. It builds on an Apple silicon or Intel Mac, Xcode 26 (macOS 15.6 or later), a
 full Xcode selected with `xcode-select` and the Homebrew packages listed under
 [Prerequisites](docs/build.md#prerequisites); the renderer and scene engine are
 vendored under [`upstream/`](upstream), not pulled in as submodules.

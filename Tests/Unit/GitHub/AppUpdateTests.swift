@@ -23,23 +23,34 @@ final class AppUpdateTests: XCTestCase {
                 ("WallpaperMachine-1.2.3-arm64.zip", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.zip", 150, nil),
                 ("WallpaperMachine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3.dmg", 200, nil),
                 ("WallpaperMachine-1.2.3-arm64.dmg.sha256", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.dmg.sha256", 90, nil),
+                ("WallpaperMachine-1.2.3-x86_64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-x86_64.dmg", 280, "sha256:" + String(repeating: "cd", count: 32)),
                 ("WallpaperMachine-1.2.3-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/WallpaperMachine-1.2.3-arm64.dmg", 300, "sha256:" + String(repeating: "ab", count: 32))
             ]
         ))
         XCTAssertEqual(release.version.display, "1.2.3")
+        #if arch(x86_64)
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-x86_64.dmg")
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.digest, "sha256:" + String(repeating: "cd", count: 32))
+        #else
         XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.dmg")
         XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.digest, "sha256:" + String(repeating: "ab", count: 32))
+        #endif
     }
 
-    func testParserFallsBackToAnArm64DiskImageThenAnyProductDiskImage() throws {
+    func testParserFallsBackToTheHostDiskImage() throws {
         let renamed = try GitHubReleaseParser.decode(Self.releaseJSON(
             tag: "v1.2.3",
             assets: [
                 ("WallpaperMachine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/plain.dmg", 200, nil),
-                ("WallpaperMachine-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/arm64.dmg", 300, nil)
+                ("WallpaperMachine-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/arm64.dmg", 300, nil),
+                ("WallpaperMachine-1.2.3-x86_64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/intel.dmg", 300, nil)
             ]
         ))
+        #if arch(x86_64)
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: renamed)?.name, "WallpaperMachine-1.2.3-x86_64.dmg")
+        #else
         XCTAssertEqual(GitHubReleaseParser.selectAsset(from: renamed)?.name, "WallpaperMachine-arm64.dmg")
+        #endif
 
         let plain = try GitHubReleaseParser.decode(Self.releaseJSON(
             tag: "v1.2.3",
@@ -48,7 +59,19 @@ final class AppUpdateTests: XCTestCase {
                 ("WallpaperMachine-1.2.3.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/plain.dmg", 200, nil)
             ]
         ))
+        #if arch(x86_64)
+        XCTAssertNil(GitHubReleaseParser.selectAsset(from: plain))
+        #else
         XCTAssertEqual(GitHubReleaseParser.selectAsset(from: plain)?.name, "WallpaperMachine-1.2.3.dmg")
+        #endif
+
+        let universal = try GitHubReleaseParser.decode(Self.releaseJSON(
+            tag: "v1.2.3",
+            assets: [
+                ("WallpaperMachine-1.2.3-universal.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/universal.dmg", 400, nil)
+            ]
+        ))
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: universal)?.name, "WallpaperMachine-1.2.3-universal.dmg")
     }
 
     func testZipOnlyReleaseIsLeftToAManualDownload() throws {
@@ -77,8 +100,12 @@ final class AppUpdateTests: XCTestCase {
         // scripts/package.py writes this name and .github/workflows/build.yml refuses
         // to publish anything else. Renaming one side without the others silently
         // drops every user back to a manual download.
-        XCTAssertEqual(AppUpdateConfiguration.assetName(for: SemanticVersion("1.2.3")!),
-                       "WallpaperMachine-1.2.3-arm64.dmg")
+        #if arch(x86_64)
+        let expected = "WallpaperMachine-1.2.3-x86_64.dmg"
+        #else
+        let expected = "WallpaperMachine-1.2.3-arm64.dmg"
+        #endif
+        XCTAssertEqual(AppUpdateConfiguration.assetName(for: SemanticVersion("1.2.3")!), expected)
     }
 
     func testParserPrefersTheArchiveNamedForThisVersion() throws {
@@ -86,10 +113,16 @@ final class AppUpdateTests: XCTestCase {
             tag: "v1.2.3",
             assets: [
                 ("WallpaperMachine-1.2.2-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/old.dmg", 100, nil),
-                ("WallpaperMachine-1.2.3-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/new.dmg", 300, nil)
+                ("WallpaperMachine-1.2.2-x86_64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/old-intel.dmg", 100, nil),
+                ("WallpaperMachine-1.2.3-arm64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/new.dmg", 300, nil),
+                ("WallpaperMachine-1.2.3-x86_64.dmg", "https://github.com/bobbyhuang-dev/WallpaperMachine/releases/download/v1.2.3/new-intel.dmg", 300, nil)
             ]
         ))
+        #if arch(x86_64)
+        XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-x86_64.dmg")
+        #else
         XCTAssertEqual(GitHubReleaseParser.selectAsset(from: release)?.name, "WallpaperMachine-1.2.3-arm64.dmg")
+        #endif
     }
 
     func testChecksumSidecarIsNeverDownloadedAsAnUpdate() throws {

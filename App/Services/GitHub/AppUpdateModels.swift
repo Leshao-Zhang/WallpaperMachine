@@ -1,5 +1,16 @@
 import Foundation
 
+/// The architecture of the running binary. A universal build reports the slice that is executing.
+enum HostArchitecture {
+    static var machOName: String {
+        #if arch(x86_64)
+        "x86_64"
+        #else
+        "arm64"
+        #endif
+    }
+}
+
 enum AppUpdateConfiguration {
     static let repository = "WallpaperMachine/WallpaperMachine"
     static let bundleIdentifier = "app.wallpapermachine"
@@ -8,9 +19,10 @@ enum AppUpdateConfiguration {
     static let maximumDownloadBytes: Int64 = 1_073_741_824
 
     /// The drag-to-install disk image `scripts/package.py` produces and the Build workflow
-    /// publishes. Renaming the product moves both sides of this contract at once.
+    /// publishes for this Mac. Apple silicon looks for `-arm64`, Intel for `-x86_64`.
+    /// Renaming the product moves both sides of this contract at once.
     static func assetName(for version: SemanticVersion) -> String {
-        "\(productName)-\(version.display)-arm64.dmg"
+        "\(productName)-\(version.display)-\(HostArchitecture.machOName).dmg"
     }
 
     static var repositoryURL: URL {
@@ -284,15 +296,31 @@ enum GitHubReleaseParser {
 
     /// The disk image to download: only product-named `.dmg` assets qualify, so the
     /// `.dmg.sha256` sidecar, zips, feeds and blockmaps never do, and a release without
-    /// one is left to a manual download.
+    /// one for this Mac is left to a manual download.
+    ///
+    /// Preference is the exact host name, then any product image whose name carries that
+    /// architecture, then a universal image. An untagged product image is the historical
+    /// Apple silicon package; an Intel Mac does not install it, because it may be arm64-only.
     static func selectAsset(from release: GitHubRelease) -> GitHubReleaseAsset? {
         let expected = AppUpdateConfiguration.assetName(for: release.version).lowercased()
+        let architecture = HostArchitecture.machOName
         let candidates = release.assets.filter { asset in
             asset.isDiskImage && asset.name.lowercased().contains(AppUpdateConfiguration.productName.lowercased())
         }
-        return candidates.first { $0.name.lowercased() == expected }
-            ?? candidates.first { $0.name.lowercased().contains("arm64") }
-            ?? candidates.first
+        if let exact = candidates.first(where: { $0.name.lowercased() == expected }) {
+            return exact
+        }
+        if let tagged = candidates.first(where: { $0.name.lowercased().contains("-\(architecture).dmg") || $0.name.lowercased().hasSuffix("-\(architecture).dmg") }) {
+            return tagged
+        }
+        if let universal = candidates.first(where: { $0.name.lowercased().contains("-universal.dmg") }) {
+            return universal
+        }
+        #if arch(arm64)
+        return candidates.first
+        #else
+        return nil
+        #endif
     }
 
     private struct Payload: Decodable {

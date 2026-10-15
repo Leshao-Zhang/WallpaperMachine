@@ -8,7 +8,7 @@ Authoritative build document. Everything here is driven by `scripts/build.py` an
 
 | Requirement | Detail |
 |---|---|
-| Hardware | Apple Silicon only. `project.yml` sets `ARCHS: arm64`, and release disk images are named `-arm64`. |
+| Hardware | Apple silicon or Intel. `project.yml` sets `ARCHS` to `$(NATIVE_ARCH_ACTUAL)`, so the build matches the Mac it runs on. Release disk images are named `-arm64`, `-x86_64` or `-universal`. Homebrew on Apple silicon is `/opt/homebrew`; on Intel it is `/usr/local`. `scripts/build.py` passes that prefix as `HOMEBREW_PREFIX`, and the project also searches both. |
 | macOS | The app runs on macOS 15 or later (`project.yml` pins `deploymentTarget.macOS` and `MACOSX_DEPLOYMENT_TARGET` to `15.0`; `scripts/build.py` passes the same value to the renderer as `OWE_MACOSX_DEPLOYMENT_TARGET`); building needs Xcode 26, so macOS 15.6 or later. Bundled Homebrew dylibs keep the release they were built on, so a package made on a newer macOS requires that newer release (see [packaging](#packaging-and-installing)); CI builds the published image on a `macos-15` runner for that reason. The lock-screen extension stays off below macOS 26. |
 | Xcode | A full Xcode selected with `xcode-select`. The build reads `xcode-select -p` for the toolchain and `xcrun --sdk macosx --show-sdk-path` for the SDK. Command Line Tools alone are not enough. |
 | Homebrew | Provides every renderer dependency; `brew --prefix` is queried at build time. |
@@ -162,7 +162,8 @@ CI adds `--require-deployment-target` and `--sign-identity` (see the preflight a
 `scripts/package.py` takes the already-built bundle at
 `build/Build/Products/<configuration>/WallpaperMachine.app`, makes it
 self-contained, and wraps it in the drag-to-install disk image
-`WallpaperMachine-<version>-arm64.dmg` with its `.sha256` sidecar beside the app.
+`WallpaperMachine-<version>-<arch>.dmg` with its `.sha256` sidecar beside the app.
+`<arch>` is `arm64`, `x86_64` or `universal`, from the slices in the built binary.
 It exits with `Build the application first using scripts/build.py` when that
 bundle is absent.
 
@@ -239,7 +240,7 @@ bundle is absent.
    dependency: …` (Swift runtime libraries are exempt).
 6. **Disk image.** The version is read from the bundle's
    `CFBundleShortVersionString`, and [`scripts/lib/dmg.py`](../scripts/lib/dmg.py)
-   writes `WallpaperMachine-<version>-arm64.dmg`: an HFS+ volume named
+   writes `WallpaperMachine-<version>-<arch>.dmg`: an HFS+ volume named
    `WallpaperMachine <version>` holding the bundle (copied with `ditto`, so its
    signatures survive; extended attributes and resource forks stay behind, so the
    File Provider attributes described under Troubleshooting never reach the
@@ -255,7 +256,7 @@ bundle is absent.
    claims, pass `codesign --verify --deep --strict` and meet the same
    [contract](#bundle-contract) as the build, and the `Applications`
    link and the window layout must be there. Only then is
-   `WallpaperMachine-<version>-arm64.dmg.sha256` written, in the format
+   `WallpaperMachine-<version>-<arch>.dmg.sha256` written, in the format
    `shasum -a 256 -c` reads. The in-app updater depends on the image name; see
    [release.md](release.md). The script labels the image not cleared for
    distribution; [../LICENSING.md](../LICENSING.md) records why.

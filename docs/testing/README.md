@@ -135,7 +135,7 @@ invites a pointless re-run.
   `SteamCMDLiveInstallTests/testLiveNativePackageInstall` also downloads Valve's
   package manifest and runtime into a temporary support directory, using the real
   setup store, signature/Gatekeeper checks and native no-login smoke run. It
-  asserts Ready, arm64 availability and successful Steam API initialization;
+  asserts Ready, a native (arm64 or x86_64) runtime and successful Steam API initialization;
   no saved session or real installed SteamCMD is read or changed. Run it after
   setup/runtime changes with `WALLPAPER_MACHINE_NETWORK_TESTS=1 python3
   scripts/test.py --only SteamCMDLiveInstallTests`. Network opt-in raises the

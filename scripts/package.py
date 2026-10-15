@@ -5,7 +5,7 @@ Nothing in the bundle is touched until the preflight passes: the FFmpeg librarie
 the binaries actually link must be an LGPL build (Formula/mwe-ffmpeg.rb), never a
 `--enable-gpl` / `--enable-version3` / `--enable-nonfree` one, and every bundled
 Homebrew keg must carry license files to ship. The signed bundle then goes into
-`WallpaperMachine-<version>-arm64.dmg`, the drag-to-install image laid out by
+`WallpaperMachine-<version>-<arch>.dmg` (`arm64`, `x86_64` or `universal`), the drag-to-install image laid out by
 scripts/lib/dmg.py, which is mounted and verified before its `.sha256` sidecar is
 written. The image is for local use; LICENSING.md records why it is not cleared for
 distribution.
@@ -321,7 +321,7 @@ def package(args):
             if dependency.startswith("@rpath/") and not (frameworks / Path(dependency).name).exists() and "libswift" not in dependency:
                 raise PackagingError(f"Missing bundled dependency: {dependency}")
     version = output(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", info]).strip()
-    image = dmg.build(app, app.parent / dmg.image_name(version), dmg.volume_name(version), icon=resources / "AppIcon.icns")
+    image = dmg.build(app, app.parent / dmg.image_name(version, dmg.disk_image_architecture(binary)), dmg.volume_name(version), icon=resources / "AppIcon.icns")
     # Prove the image, not the build tree: users and the in-app updater install
     # exactly this file, and a bundle that does not survive the round trip is not one.
     report(dmg.verify(image, version), reported)

@@ -26,7 +26,7 @@ READ_ONLY = "com.apple.security.temporary-exception.files.absolute-path.read-onl
 REPOSITORY_ENTITLEMENTS = {
     SANDBOX: True,
     "com.apple.security.network.client": True,
-    READ_ONLY: ["/opt/homebrew/"],
+    READ_ONLY: ["/opt/homebrew/", "/usr/local/"],
 }
 HOST_INFO = {
     "CFBundleIdentifier": "app.wallpapermachine",
@@ -251,7 +251,7 @@ class CodesignReaderTests(unittest.TestCase):
         return path
 
     def test_signed_entitlements_are_read_back_with_their_types(self):
-        entitlements = {SANDBOX: True, READ_ONLY: ["/opt/homebrew/"]}
+        entitlements = {SANDBOX: True, READ_ONLY: ["/opt/homebrew/", "/usr/local/"]}
         self.assertEqual(bundle_contract.read_entitlements(self.binary("with", entitlements)), entitlements)
 
     def test_a_signature_without_entitlements_reads_as_none(self):

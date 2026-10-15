@@ -49,29 +49,49 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def accepted_image_names(version):
+    """Disk image names the updater can install for `version`."""
+    return [image_name(version, architecture) for architecture in ("arm64", "x86_64", "universal")]
+
+
 def manifest(tag, repository, notes, image):
-    """The manifest for one release, as a dict ready for JSON."""
+    """The manifest for one release, as a dict ready for JSON.
+
+    `image` is one disk image or a sequence of them. Each must be named for this
+    tag and for `arm64`, `x86_64` or `universal`, so an Apple silicon app and an
+    Intel app can both select an asset from the same manifest.
+    """
     match = VERSION_TAG.match(tag)
     if not match:
         raise ManifestError(f"{tag!r} is not a release tag like v1.2.3.")
     if not REPOSITORY.match(repository):
         raise ManifestError(f"{repository!r} is not an owner/name repository.")
-    image = Path(image)
-    expected = image_name(match.group(1))
-    if image.name != expected:
-        raise ManifestError(f"{image.name} is not {expected}, the image the updater installs for {tag}.")
+    images = image if isinstance(image, (list, tuple)) else [image]
+    expected = accepted_image_names(match.group(1))
+    seen = set()
+    assets = []
     base = f"https://github.com/{repository}/releases"
+    for item in images:
+        item = Path(item)
+        if item.name not in expected:
+            raise ManifestError(f"{item.name} is not one of {', '.join(expected)}, the images the updater installs for {tag}.")
+        if item.name in seen:
+            raise ManifestError(f"{item.name} is listed twice.")
+        seen.add(item.name)
+        assets.append({
+            "name": item.name,
+            "browser_download_url": f"{base}/download/{tag}/{item.name}",
+            "size": item.stat().st_size,
+            "digest": f"sha256:{sha256(item)}",
+        })
+    if not assets:
+        raise ManifestError(f"{tag} has no disk image.")
     return {
         "tag_name": tag,
         "html_url": f"{base}/tag/{tag}",
         "prerelease": False,
         "body": Path(notes).read_text(encoding="utf-8"),
-        "assets": [{
-            "name": image.name,
-            "browser_download_url": f"{base}/download/{tag}/{image.name}",
-            "size": image.stat().st_size,
-            "digest": f"sha256:{sha256(image)}",
-        }],
+        "assets": assets,
     }
 
 
@@ -80,12 +100,12 @@ def main(argv=None):
     parser.add_argument("--tag", required=True, help="Version tag the release belongs to, like v1.2.3.")
     parser.add_argument("--repository", required=True, help="owner/name of the repository the release is in.")
     parser.add_argument("--notes", required=True, help="Markdown file that becomes the release body.")
-    parser.add_argument("image", help="The disk image the release publishes.")
+    parser.add_argument("image", nargs="+", help="Disk images the release publishes, one per architecture.")
     args = parser.parse_args(argv)
-    for path in (args.notes, args.image):
+    for path in (args.notes, *args.image):
         if not Path(path).is_file():
             raise ManifestError(f"Not a file: {path}")
-    output = Path(args.image).with_name(MANIFEST_NAME)
+    output = Path(args.image[0]).with_name(MANIFEST_NAME)
     content = manifest(args.tag, args.repository, args.notes, args.image)
     output.write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(output)

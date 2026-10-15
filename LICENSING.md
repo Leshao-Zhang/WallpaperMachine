@@ -435,7 +435,7 @@ prefix is `app.wallpapermachine`.
 
 ## Local build and use
 
-This build targets Apple Silicon and macOS 15 or later, and requires Xcode and
+This build targets Apple silicon and Intel Macs on macOS 15 or later, and requires Xcode and
 Homebrew. Packaged renderer libraries are bundled into the app for local use
 only and are not cleared for distribution.
 

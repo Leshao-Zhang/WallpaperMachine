@@ -1176,8 +1176,9 @@ turned off, are in the [manual smoke](manual-smoke.md) and have not been run.
   with no late writes, and retained blocked candidates surviving relaunch. An
   installation-to-downloader regression runs the published executable through the
   real PTY downloader and asserts imported manifest and media bytes.
-- `SteamCMDRuntimeValidationTests` (Workshop folder) — arm64 only; Intel-only
-  copies are rejected and need a native reinstall; Mach-O load commands and
+- `SteamCMDRuntimeValidationTests` (Workshop folder) — a SteamCMD copy must
+  contain the host slice (arm64 or x86_64); the other architecture is rejected
+  and needs a native reinstall; Mach-O load commands and
   nested executable dependencies.
 - `SteamCMDApprovalTests` use isolated fixtures: exact SHA-256 receipts, policy
   failure rejection, stale candidates, changed resources, private copies,

@@ -417,9 +417,10 @@ its universal runtime packages directly. It verifies each package's SHA-256,
 SHA-1 filename and size before safe extraction, normalizes Valve's backslash
 paths, restores execute permissions and quarantines the extracted files. The
 manifest is retained as `package/steam_cmd_osx.manifest`. No Intel bootstrap or
-Valve updater is run, and Rosetta is not needed. Every runtime Mach-O must carry
-an arm64 slice; all setup and download launches require native execution.
-Existing Intel-only copies offer **Install SteamCMD**, with confirmation before
+Valve updater is run. Every runtime Mach-O must carry a slice for the Mac it runs
+on: arm64 on Apple silicon, where Rosetta is not used, and x86_64 on Intel.
+Launches request that slice. A copy built only for the other architecture offers
+**Install SteamCMD**, with confirmation before
 replacing the old installation. Valve changing or removing this manifest can
 block new installs; malformed or missing packages fail closed without replacing a
 working copy.

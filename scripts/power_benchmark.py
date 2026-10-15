@@ -274,10 +274,19 @@ def system_identity():
 def renderer_libraries():
     """Current host Homebrew versions; these do not identify a running process."""
     versions = {}
+    prefixes = []
+    brew = command_output(["brew", "--prefix"])
+    if brew:
+        prefixes.append(brew.strip())
+    for fallback in ("/opt/homebrew", "/usr/local"):
+        if fallback not in prefixes:
+            prefixes.append(fallback)
     for formula in ("mwe-ffmpeg", "quickjs-ng", "glslang", "molten-vk", "freetype", "lz4"):
-        target = command_output(["readlink", f"/opt/homebrew/opt/{formula}"])
-        if target:
-            versions[formula] = target.rsplit("/", 1)[-1]
+        for prefix in prefixes:
+            target = command_output(["readlink", f"{prefix}/opt/{formula}"])
+            if target:
+                versions[formula] = target.rsplit("/", 1)[-1]
+                break
     return versions
 
 

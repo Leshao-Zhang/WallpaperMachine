@@ -19,6 +19,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -54,11 +55,17 @@ def test_identifiers(target, only):
     return identifiers or [target]
 
 
+def host_architecture():
+    """The slice xcodebuild should test: the Mac this script is running on."""
+    machine = platform.machine()
+    return machine if machine in {"arm64", "x86_64"} else "arm64"
+
+
 def xcodebuild_command(scheme, target, result, only=None, parallel=True):
     command = [
         "xcodebuild", "-project", XCODEPROJ.name,
         "-scheme", scheme, "-configuration", "Debug", "-derivedDataPath", str(BUILD),
-        "-destination", "platform=macOS,arch=arm64", "-resultBundlePath", str(result),
+        "-destination", f"platform=macOS,arch={host_architecture()}", "-resultBundlePath", str(result),
     ]
     command += ["-only-testing:" + identifier for identifier in test_identifiers(target, only)]
     # Test classes run in parallel worker processes. Every suite already isolates its
