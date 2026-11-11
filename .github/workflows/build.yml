@@ -38,6 +38,10 @@ on:
         description: "Build and upload the disk images without publishing a release."
         type: boolean
         default: true
+  # Pull requests build both images and upload them. They do not publish: a release
+  # is only workflow_call, which is what Version and Release use. inputs.validate_only
+  # is unset here, so notes, the test gate and publish stay off.
+  pull_request:
 
 permissions:
   contents: read
@@ -161,7 +165,7 @@ jobs:
         env:
           SIGNING_CERTIFICATE_P12: ${{ secrets.SIGNING_CERTIFICATE_P12 }}
           SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
-          VALIDATE_ONLY: ${{ inputs.validate_only }}
+          VALIDATE_ONLY: ${{ github.event_name != 'workflow_call' || inputs.validate_only == true }}
         run: |
           set -euo pipefail
           if [ -z "${SIGNING_CERTIFICATE_P12}" ] || [ -z "${SIGNING_CERTIFICATE_PASSWORD}" ]; then
