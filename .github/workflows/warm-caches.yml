@@ -4,7 +4,8 @@
 # quiet week would then rebuild FFmpeg, the C++ scene engine and the renderer from
 # nothing. This builds the renderer through the same setup Build uses, which reads
 # every entry and refreshes the C++ object cache. Scheduled runs use main, whose
-# caches every ref, including release tags, can read. It publishes nothing.
+# caches every ref, including release tags, can read. It publishes nothing. The
+# Intel release runner has its own entries: an arm64 cache must not be restored there.
 name: Warm caches
 
 on:
@@ -22,12 +23,12 @@ concurrency:
 
 jobs:
   warm:
-    # Build's release job runs on macOS 15 and its test job on macOS 26; each keeps
-    # its own entries.
+    # Build's release jobs run on macOS 15 (arm64 and Intel) and its test job on
+    # macOS 26. Cache keys include the CPU, so each runner keeps its own entries.
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-26]
+        runner: [macos-15, macos-15-intel, macos-26]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:

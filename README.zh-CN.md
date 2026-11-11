@@ -157,7 +157,7 @@ WallpaperMachine 支持场景、视频和网页渲染。兼容性因壁纸而异
 <details>
 <summary><b>如何获取？</b></summary>
 
-签名版可以从 [GitHub 最新发布](https://github.com/WallpaperMachine/WallpaperMachine/releases/latest)免费下载，你也可以[用源代码自行构建](#开源与自行构建)。该版本未经公证，macOS 会拦下首次启动，直到你在“系统设置 → 隐私与安全性”中点按“仍要打开”。[安装指南](https://www.wallpapermachine.app/zh/guides/install/)会带你从下载一直走到首次使用引导。此后应用会自行检查新版本；在能替换自身副本的情况下，它会提供**重启并更新**。
+签名版可以从 [GitHub 最新发布](https://github.com/WallpaperMachine/WallpaperMachine/releases/latest)免费下载，你也可以[用源代码自行构建](#开源与自行构建)。每次发布有两份磁盘映像：Apple 芯片用 `WallpaperMachine-<version>-arm64.dmg`，Intel 用 `WallpaperMachine-<version>-x86_64.dmg`。该版本未经公证，macOS 会拦下首次启动，直到你在“系统设置 → 隐私与安全性”中点按“仍要打开”。[安装指南](https://www.wallpapermachine.app/zh/guides/install/)会带你从下载一直走到首次使用引导。此后应用会自行检查新版本；在能替换自身副本的情况下，它会提供**重启并更新**。
 
 </details>
 

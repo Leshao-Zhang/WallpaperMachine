@@ -214,7 +214,9 @@ Steam account names are replaced first.
 
 Download the signed build free from the
 [latest release](https://github.com/WallpaperMachine/WallpaperMachine/releases/latest),
-or [build it from the source](#open-source-free-to-build). The build is not
+or [build it from the source](#open-source-free-to-build). The release has two
+disk images: `WallpaperMachine-<version>-arm64.dmg` for Apple silicon and
+`WallpaperMachine-<version>-x86_64.dmg` for Intel. The build is not
 notarized, so macOS holds its first launch until you click Open Anyway in
 System Settings → Privacy & Security. The
 [install guide](https://www.wallpapermachine.app/guides/install/) walks through

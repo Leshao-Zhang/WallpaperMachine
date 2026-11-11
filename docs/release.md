@@ -291,14 +291,17 @@ protection must allow GitHub Actions.
 
 ### Build (`build.yml`)
 
-`workflow_call` only, with a required `tag` input. It is the single place a
-publishable artifact is produced, called by Version for CI-produced tags and by
-Release for hand-pushed ones. It runs four jobs. `app-icon` compiles the app icon
-on a `macos-26` runner. `build` then runs on `macos-15` (the oldest runner that
-carries Xcode 26, whose Homebrew bottles set the published app's minimum macOS)
-while `test` runs on `macos-26`, 150-minute timeout each, so the test gate adds no
-time on top of the Release build. `publish` runs on `ubuntu-latest` only after
-both succeed, so a published binary has passed the same gate a change has to pass.
+`workflow_call` with a required `tag` input, and `workflow_dispatch` to build
+without publishing. It is the single place a publishable artifact is produced,
+called by Version for CI-produced tags and by Release for hand-pushed ones.
+`app-icon` compiles the app icon on a `macos-26` runner. `notes` writes the
+release body once. `build` then runs twice, on `macos-15` and `macos-15-intel`
+(the oldest runners that carry Xcode 26, whose Homebrew bottles set the published
+app's minimum macOS), while `test` runs on `macos-26`, 150-minute timeout each,
+so the test gate adds no time on top of the Release build. `publish` runs on
+`ubuntu-latest` only after every one of them succeeds, so a published binary has
+passed the same gate a change has to pass. A dispatched run sets `validate_only`
+and uploads both disk images as artifacts; it does not publish.
 
 The icon is compiled apart because Xcode 26's `actool` crashes on most `.icon`
 compiles on macOS 15 ([build.md](build.md#stages-and-outputs)). `app-icon` runs
@@ -306,21 +309,27 @@ compiles on macOS 15 ([build.md](build.md#stages-and-outputs)). `app-icon` runs
 `AppIcon.icns` and the partial Info.plist to `build` as the `app-icon-<tag>`
 artifact.
 
-**`build`**
+**`notes`** checks out the tag with full history and writes the release body with
+`scripts/release_notes.py --release-body --ai --built-from "$(git rev-parse HEAD)"`
+before either architecture is built. The current section must already be bilingual
+(`### English`, then `### 简体中文`) and is reused without calling the model; a
+hand-pushed tag with no section gets one written once into the working-tree
+`CHANGELOG.md`, so both apps bundle both languages. English-only or malformed
+source history fails here, in seconds, rather than after the macOS builds. The
+notes and that changelog are the `release-<tag>-notes` artifact.
 
-1. checks out the tag with full history, which the notes need;
-2. writes the release body with `scripts/release_notes.py --release-body --ai
-   --built-from "$(git rev-parse HEAD)"` before anything is built. The current
-   section must already be bilingual (`### English`, then `### 简体中文`) and is
-   reused without calling the model; a hand-pushed tag with no section gets one
-   written once into the working-tree `CHANGELOG.md`, so the app bundles both
-   languages. English-only or malformed source history fails here, in seconds,
-   rather than after the macOS build;
-3. runs `prepare-build` (below) and downloads the `app-icon-<tag>` artifact;
-4. runs `python3 scripts/build.py --configuration Release --app-icon DIR`, which
+**`build`** is one job on two runners, `macos-15` (`arm64`) and `macos-15-intel`
+(`x86_64`). Each:
+
+1. checks out the tag and replaces `CHANGELOG.md` with the notes job's copy;
+2. runs `prepare-build` (below) and downloads the `app-icon-<tag>` artifact;
+3. runs `python3 scripts/build.py --configuration Release --app-icon DIR`, which
    leaves `AppIcon.icon` out of the Xcode build, puts the compiled icon and catalog
-   into the bundle with their Info.plist keys and re-signs it;
-5. imports the project signing certificate from the two signing secrets into a
+   into the bundle with their Info.plist keys and re-signs it. No architecture
+   setting is passed. `project.yml` sets `ARCHS` to `$(NATIVE_ARCH_ACTUAL)`, cargo
+   builds the renderer for the host, and `HOMEBREW_PREFIX` is that runner's
+   `brew --prefix` (`/opt/homebrew` on Apple silicon, `/usr/local` on Intel);
+4. imports the project signing certificate from the two signing secrets into a
    temporary keychain ([build.md](build.md#release-signing)), then runs
    `python3 scripts/package.py --configuration Release --require-deployment-target
    --sign-identity "WallpaperMachine Code Signing"`, which fails if a bundled
@@ -332,14 +341,22 @@ artifact.
    contract](build.md#bundle-contract)), the `Applications` link and the window
    layout, then writes the `.sha256` sidecar
    ([build.md](build.md#packaging-and-installing));
-6. matches the image to the tag: it must be named
-   `WallpaperMachine-<tag without v>-<arch>.dmg` (`arm64` or `x86_64`, from `uname -m`
-   on the build runner), and its checksum is echoed into the
+5. requires `lipo -archs` of the app binary to be exactly that runner's
+   architecture, and the image to be named
+   `WallpaperMachine-<tag without v>-<arch>.dmg`. The checksum is echoed into the
    job summary;
-7. hands the image, its sidecar and the notes to `publish` as the
-   `release-<tag>` artifact.
+6. hands the image and its sidecar to `publish` as
+   `release-<tag>-arm64` or `release-<tag>-x86_64`.
 
-Step 6 is the guard that the bump actually reached the build:
+The Intel runner is a native build, not a cross-compile from Apple silicon.
+`macos-15-intel` is the standard GitHub-hosted x86_64 image (Xcode 26, available
+through August 2027). `macos-26-intel` would bundle newer Homebrew dylibs and
+raise the Intel app's minimum macOS above the arm64 image. Cross-compiling would
+mean a second Rosetta Homebrew, an `x86_64-apple-darwin` Rust target and a CMake
+invocation the renderer does not have; one library of the wrong architecture
+fails the link.
+
+Step 5 is the guard that the bump actually reached the build:
 `scripts/package.py` names the image from the bundle's
 `CFBundleShortVersionString`, so a mismatch means the published tag and the
 built version disagree and the job fails instead of publishing the wrong binary.
@@ -358,32 +375,39 @@ CI warning, and all other probe and test failures remain failures. Excluded and
 asset-dependent checks stay listed in the JSON reports and logs; they do not count
 as verified asset or GPU coverage.
 
-When either macOS job fails it uploads its full tool logs from `artifacts/` (for
-`test`, also any WebKit, app or jetsam reports from the run) as `build-logs-<tag>`
-or `test-logs-<tag>`, kept 14 days: the job output is only the scripts' filtered
-summary.
+When a macOS job fails it uploads its full tool logs from `artifacts/` (for
+`test`, also any WebKit, app or jetsam reports from the run) as
+`build-logs-<tag>-arm64`, `build-logs-<tag>-x86_64` or `test-logs-<tag>`, kept
+14 days: the job output is only the scripts' filtered summary.
 
 **`publish`**
 
-1. downloads the artifact and checks the image against its `.sha256` sidecar;
-2. attests build provenance for the image with
+1. downloads `release-<tag>-arm64`, `release-<tag>-x86_64` and
+   `release-<tag>-notes`, and checks each image against its `.sha256` sidecar.
+   Either image missing fails the release;
+2. attests build provenance for both images with
    `actions/attest-build-provenance`;
 3. writes the update manifest `WallpaperMachine-update.json` from the tag, the
-   notes and the image with `scripts/update_manifest.py`
+   notes and both images with `scripts/update_manifest.py`
    ([below](#what-the-in-app-updater-expects));
-4. publishes the image, its sidecar and the manifest with
+4. publishes both images, both sidecars and the manifest with
    `scripts/publish_release.py`.
 
 **`prepare-build` and the caches.** The composite action selects the newest
 non-beta `/Applications/Xcode_26*.app`, `brew install --quiet`s the
 XcodeGen/CMake/renderer package set with `dav1d` and `ccache`, and restores three
-`actions/cache` entries. Every key carries the runner's macOS (`<os>` below is
-`macos-15` or `macos-26`), because bottles, the FFmpeg keg and compiled objects
-differ between releases; `build` and `test` therefore keep separate entries.
+`actions/cache` entries. Every key carries the runner's macOS and CPU (`<os>`
+below is `macos-15-arm64`, `macos-15-x86_64` or `macos-26-arm64`), because
+bottles, the FFmpeg keg and compiled objects differ between releases and between
+architectures. `macos-15` and `macos-15-intel` report the same product version,
+so the CPU is part of the key; an arm64 `target/` restored on Intel would link
+the wrong slice. The FFmpeg path is `$(brew --prefix)/Cellar/mwe-ffmpeg`
+(`/opt/homebrew` on Apple silicon, `/usr/local` on Intel). Adding the CPU
+changed the key prefix, so the first build after that change misses and refills.
 
 | Cache | Path | Key | What a hit saves |
 |---|---|---|---|
-| LGPL FFmpeg | `/opt/homebrew/Cellar/mwe-ffmpeg` | `mwe-ffmpeg-<os>-<dav1d version>-<hash of Formula/mwe-ffmpeg.rb>` | the FFmpeg source build; the action restores the keg's `opt` link and `scripts/install_ffmpeg.py` finds the keg current |
+| LGPL FFmpeg | `$(brew --prefix)/Cellar/mwe-ffmpeg` | `mwe-ffmpeg-<os>-<dav1d version>-<hash of Formula/mwe-ffmpeg.rb>` | the FFmpeg source build; the action restores the keg's `opt` link and `scripts/install_ffmpeg.py` finds the keg current |
 | C++ objects | `~/.ccache` | `ccache-<os>-<run>`, restored by the `ccache-<os>-` prefix | recompiling the scene engine. A checkout gives every file a new mtime, so CMake rebuilds the whole engine even from a restored build tree; ccache hashes content and returns the previous objects |
 | Renderer | `~/.cargo/registry`, `~/.cargo/git`, `upstream/renderer/target` | `renderer-ccache-<os>-<hash of Cargo.lock, rust-toolchain.toml, provenance.json>`, restored by prefix | crate downloads, and Rust compilation while the nightly toolchain is unchanged |
 
@@ -433,9 +457,10 @@ use the release workflow for the shared lock. The script's docstring and
 
 GitHub evicts a cache entry nobody has read for seven days. Twice a week (and on
 demand from **Actions -> Warm caches -> Run workflow**) this runs `prepare-build`
-and `python3 scripts/build.py --renderer-only` on `main`, once on `macos-15` and
-once on `macos-26`, which reads every entry Build uses and saves a fresh C++ object
-cache for each, so a release after a quiet week still starts warm. Caches saved on
+and `python3 scripts/build.py --renderer-only` on `main`, on `macos-15`,
+`macos-15-intel` and `macos-26`, which reads every entry Build uses and saves a
+fresh C++ object cache for each, so a release after a quiet week still starts
+warm. Caches saved on
 `main` are readable from every ref, including the tags Release builds. It
 publishes nothing.
 
@@ -491,14 +516,15 @@ release has to carry for that to work.
 
 The update manifest, `WallpaperMachine-update.json`, is an asset of every release.
 `scripts/update_manifest.py` writes it in Build's `publish` job from the tag, the
-notes file that becomes the release body and the image bytes, and
+notes file that becomes the release body and both image files, and
 `scripts/publish_release.py` attaches it. It is the release object in the REST
-API's shape: `tag_name`, `html_url`, `prerelease`, `body` and one asset with
-`name`, `browser_download_url`, `size` and a `sha256:` `digest`. The app reads it
+API's shape: `tag_name`, `html_url`, `prerelease`, `body` and one asset per disk
+image, each with `name`, `browser_download_url`, `size` and a `sha256:` `digest`.
+The app reads it
 from `https://github.com/WallpaperMachine/WallpaperMachine/releases/latest/download/WallpaperMachine-update.json`,
 which github.com redirects to the file on the release marked Latest. A draft never
-resolves, and `publish_release.py` makes the release public only after the image,
-sidecar and manifest are uploaded. The name is
+resolves, and `publish_release.py` makes the release public only after both images,
+both sidecars and the manifest are uploaded. The name is
 `AppUpdateConfiguration.manifestName`; renaming it changes both sides at once. The
 script refuses a tag that is not `vx.y.z`, a repository that is not `owner/name`
 and an image not named as below.
@@ -559,11 +585,11 @@ use the preceding tag.
    `CHANGELOG.md` section and pushed `vx.y.z`. Read the section: it is `### English`
    then `### 简体中文`, and the model wrote both. The app bundles both translations;
    the GitHub release page shows only the English notes.
-3. Confirm the called Build run passed the test gate, verified the mounted
-   image, and published `WallpaperMachine-x.y.z-arm64.dmg` or
-   `WallpaperMachine-x.y.z-x86_64.dmg` with its `.sha256`
-   sidecar, `WallpaperMachine-update.json` and a provenance attestation. The
-   manifest's `digest` must equal the sidecar's checksum:
+3. Confirm the called Build run passed the test gate, verified both mounted
+   images, and published `WallpaperMachine-x.y.z-arm64.dmg` and
+   `WallpaperMachine-x.y.z-x86_64.dmg`, each with its `.sha256` sidecar,
+   `WallpaperMachine-update.json` and a provenance attestation. The manifest
+   lists both images, and each asset's `digest` must equal that image's sidecar:
    `curl -sL https://github.com/WallpaperMachine/WallpaperMachine/releases/latest/download/WallpaperMachine-update.json`.
 4. Read the release body on the page: it should contain only the English notes
    from the current `CHANGELOG.md` section, followed by the install footer,

@@ -377,23 +377,22 @@ def install_footer(version, target=None, built_from=None):
     workflow run, which for a CI-produced tag is the push that asked for the bump,
     not the bump commit the tag points at. This line is checkable —
     `git rev-parse <tag>^{commit}` must equal it.
+
+    CI publishes two images. The footer names both; the in-app updater installs
+    the one for the Mac it is running on.
     """
-    architecture = dmg.disk_image_architecture()
-    image = dmg.image_name(display_version(version), architecture)
-    tag = f"v{display_version(version)}"
-    labels = {
-        "arm64": "Apple silicon (arm64)",
-        "x86_64": "Intel (x86_64)",
-        "universal": "Apple silicon (arm64) and Intel (x86_64)",
-    }
-    label = labels[architecture]
-    requirement = f"{label}, macOS {target} or later." if target else f"{label}."
+    version = display_version(version)
+    apple = dmg.image_name(version, "arm64")
+    intel = dmg.image_name(version, "x86_64")
+    tag = f"v{version}"
+    requirement = "Apple silicon (arm64) or Intel (x86_64)"
+    requirement = f"{requirement}, macOS {target} or later." if target else f"{requirement}."
     lines = [
         NOTES_END,
         "",
         "### Install",
         "",
-        f"1. Download `{image}` and open it.",
+        f"1. Download `{apple}` on Apple silicon, or `{intel}` on Intel, and open it.",
         f"2. Drag {APPLICATION} onto the Applications folder in the window that opens. In-app updates",
         "   replace a copy in `/Applications` or `~/Applications` and nowhere else.",
         "3. The app is signed with the project's own certificate but not notarized, so macOS stops",
@@ -402,7 +401,8 @@ def install_footer(version, target=None, built_from=None):
         "### Verify the download",
         "",
         "```sh",
-        f"shasum -a 256 -c {image}.sha256",
+        f"shasum -a 256 -c {apple}.sha256",
+        f"shasum -a 256 -c {intel}.sha256",
         "```",
         "",
         requirement,
