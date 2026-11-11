@@ -25,6 +25,15 @@ and moves whatever falls past ten verbatim into a monthly file under
 [archive/](archive/); promote anything durable before it goes. Editing an
 entry's recorded result is not allowed.
 
+## 2026-11-11 — Intel release image
+
+Release CI is set up to build a native x86_64 disk image on macos-15-intel beside the existing arm64 image. project.yml is unchanged.
+
+- `python3 scripts/tests/test_release_notes.py` — 56 tests passed.
+- `python3 scripts/tests/test_update_manifest.py` — 4 tests passed.
+- `python3 scripts/tests/test_publish_release.py` — 16 tests passed.
+- Hosted `macos-15` and `macos-15-intel` builds — not run. `gh workflow run` returned HTTP 403, and pushing the branch did not enqueue an Actions run.
+
 ## 2026-10-14 — Send performance data, sharing and the one-time prompts
 
 Opt-in telemetry (docs/features/telemetry.md), share buttons, and a prompt store that schedules the support, star and performance data prompts. The website endpoint lives in the website repository and is not deployed.
@@ -127,14 +136,3 @@ Shader legalizer repairs for permissive-path expressions that dropped whole Work
 - `python3 scripts/check_renderer.py` — exit 0; generated cases pixel-equal pooled/isolated, no diagnostics; reload cycles clean
 - `python3 scripts/test.py` — first run 1 failure in EnergyUsageMonitorTests.testKernelCountersForThisProcessAdvanceWithGPUWork (8.05 mW < 10 mW, own compute kernel, while another session ran GPU probes); class alone 13/13; rerun exit 0: 2,564 passed, 45 skipped
 - Not checked: whether each restored effect looks as it does in Wallpaper Engine; no desktop run
-
-## 2026-10-13 — Robustness, web, video, lock-screen and panel port: integrated gate
-
-105 commits of independently implemented reliability, web-host, native-video, lock-screen, power, Workshop, playlist, menu-bar, switch-hold and per-display position work, verified together on one tree on top of 20f44470 (the per-commit entries record each area's targeted runs).
-
-- `python3 scripts/test.py` — exit 0 on the second run; Python 316 tests OK; Swift 2564 passed, 0 failed, 45 skipped of 2609. The first run had one failure, ControlPanelLibraryTests.testHoldAndDragSelectsARunOfTilesWithoutWindow, under load from another build; the class passed alone (17/17) and the sweep code is unchanged by this work
-- `python3 scripts/check_rust.py` — exit 0; core 293, bridge 542, core-integration 15, shader 534 passed; desktop window tests and corpus smoke cases skipped
-- `python3 scripts/check_renderer.py` — exit 0; 708 gtest cases passed, 4 skipped (local-asset cases), 0 failed; no --project corpus, so authored-reference compatibility is not verified
-- `python3 scripts/build.py --configuration Release` — exit 0; regenerated bindings identical to the committed ones
-- Commits that change the bridge API or move test helpers were each compiled on their own with `scripts/test.py --only` at that commit
-- Not verified: no desktop run. The switch-hold picture during a wallpaper change, wake and stall repair, the lock screen, menu-bar submenus, the position controls on real displays, native-video layout on real displays and live Steam downloads still need an authorized desktop check

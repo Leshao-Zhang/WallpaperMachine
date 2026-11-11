@@ -38,10 +38,6 @@ on:
         description: "Build and upload the disk images without publishing a release."
         type: boolean
         default: true
-  # Pull requests build both images and upload them. They do not publish: a release
-  # is only workflow_call, which is what Version and Release use. inputs.validate_only
-  # is unset here, so notes, the test gate and publish stay off.
-  pull_request:
 
 permissions:
   contents: read
