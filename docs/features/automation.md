@@ -5,7 +5,7 @@ appearance or Focus. Global keyboard shortcuts, actions in the Shortcuts app
 (and so Siri and Spotlight), and `wallpapermachine://` links run explicit
 commands (`AutomationCommand`)
 through `AppAutomation` into `AppDelegate.performAutomation`, which the menu bar's
-Mute Wallpapers, Previous, Next, Random Wallpaper, Recently used, Remove from Display and Start Again items use too (with
+Play/Pause, Mute Wallpapers, Previous, Next, Random Wallpaper, Recently used, Remove from Display and Start Again items use too (with
 two or more displays the menu has a submenu for each, see
 [the menu bar](control-panel.md#menu-bar-one-display-at-a-time)). They only do what the
 menu bar and the panel already offer: play, pause, mute or unmute every wallpaper, the previous, next or a random wallpaper,
@@ -25,13 +25,15 @@ choices across multiple independent displays.
 | Off | Leaves the wallpaper and any existing playlist under their usual controls. |
 | Time schedule | Up to 64 rules, each with weekdays, a clock time or sunrise/sunset plus a −180…180 minute offset, and a wallpaper or saved playlist. |
 | Follow system appearance | Separate choices for the system's light and dark appearance; an empty choice leaves the display as it is. The panel's own theme is independent. |
-| Follow desktop Space | Experimental choices by desktop UUID, reloaded after entering that desktop; an empty choice keeps the current wallpaper. See [Space-based choices](spaces.md) for pause/Focus behavior and native lock-screen limits. |
+| Different wallpaper for each desktop | Choices by desktop UUID, made on the display's card or by applying a wallpaper on that desktop, and loaded after entering it, or run on where they paused when the desktop was visited before. A desktop without a choice follows Desktop 1's; only when Desktop 1 has none either does the display keep the current wallpaper. Only the current desktop plays: in Mission Control the others show a still picture. See [a wallpaper for each desktop](spaces.md) for pause/Focus behavior and native lock-screen limits. |
 
 A wallpaper target turns that display's playlist off after successful activation.
 A saved playlist copies its current settings, then the existing playlist scheduler
 takes over. Editing a saved plan does not update an already applied copy. Mirrored
 and disabled displays do not accept rules. Disconnected displays keep their settings
-and catch up when eligible again.
+and catch up when eligible again. **Remove** on a time rule asks in the row (**Remove this
+rule?**, **Cancel** or **Remove**) before the rule is gone, as deleting a display layout or
+a saved playlist does.
 
 Time rules use the Mac's time zone. The latest due rule wins; equal timestamps
 choose the later rule in the list. A daylight-saving gap moves a nonexistent time
@@ -40,18 +42,38 @@ After sleep, lock, pause, a covered display or a display that is not in use, onl
 when playback can run again. Manual wallpaper and playlist choices mark the current
 event handled, including across relaunch. A rule that comes due while your own
 Apply is waiting on that display, or running there, gives way to it and is not
-applied afterwards; it counts as handled, like a manual choice. Saving changed rules creates a new event
+applied afterwards; it counts as handled, like a manual choice. Another automatic command
+taking its place in the line is different: an update reloading the display's files, or a
+playlist change, replaces a rule or Focus change that was still waiting its turn, and
+because nothing the user chose stands in its place it stays due and is asked for again
+(`UserCommandQueue.Outcome`). A Focus wallpaper, or the restoration after a Focus, is
+therefore never lost to an update that happened to reload the display meanwhile. Saving changed rules creates a new event
 and may apply it immediately. A failed event is reported in the display's section
 and waits for **Retry automatic change** or a later event.
 
-**Sunrise and sunset**, at the bottom of Displays, accepts manual latitude and
-longitude: north/east positive, south/west negative. Calculation is local, requires
-no location permission or network request, and follows the approximate
+**Sunrise and sunset**, at the bottom of Displays, offers three time sources. With
+**Coordinates** it accepts manual latitude and longitude: north/east positive,
+south/west negative. Calculation is local, requires no location permission or
+network request, and follows the approximate
 [NOAA solar equations](https://www.gml.noaa.gov/grad/solcalc/solareqns.PDF).
-It uses the Mac's time zone even when coordinates describe another region. Weekdays
-refer to the solar event's civil day before applying the offset; offsets may cross
-midnight. Days without a sunrise/sunset near the poles are skipped. A solar rule
-without saved coordinates has no event until a location is supplied.
+It uses the Mac's time zone even when coordinates describe another region.
+
+With **Fixed times** it uses the two clock times entered there instead of
+calculating anything, so no coordinates are needed. Rules keep their offsets, so a
+rule at sunset − 15 minutes fires 15 minutes before the fixed sunset time.
+
+Choosing **Automatic** asks for location access and keeps the Mac's approximate
+position up to date, then calculates like **Coordinates**. Location updates stop
+when another source is selected, and the last position keeps planning while a new
+fix is unavailable. Relaunching resumes already-authorized updates without asking
+for permission. If Location Services is off or access was refused, the panel says
+so and links to System Settings; allowing access there resumes updates while
+**Automatic** remains selected.
+
+Weekdays refer to the solar event's civil day before applying the offset; offsets
+may cross midnight. Days without a sunrise/sunset near the poles are skipped. A
+coordinate-based or automatic solar rule without a location has no event until one
+is supplied.
 
 ## Focus selection and restoration
 
@@ -77,6 +99,16 @@ merges by display. The handled-event and Focus recovery records are local runtim
 state, excluded from exports, cleared when restored settings replace their baseline,
 and retained if restore rolls back.
 
+Every display's rules are one saved value, read one display at a time. A display whose
+record this build cannot read (saved by a newer build that knows another mode, or damaged)
+is set aside as it was saved: the other displays' rules load, **Some automatic wallpaper
+settings could not be read** stays on show while it is set aside, and every save writes it
+back unchanged, so editing one display never erases another's and installing the newer
+build again finds its rules. Giving that display rules of its own replaces what could not
+be read. Focus recovery records, saved playlists, local collections and app rules are kept
+the same way (`PreservedJSON`). A value that is not the expected kind of JSON at all, is
+over 2 MiB, or holds more than 64 displays is still dropped whole.
+
 ## Commands
 
 | Command | What it does |
@@ -91,7 +123,7 @@ and retained if restore rolls back.
 | Apply saved playlist | Copies a saved plan to the chosen display and starts it when playback can run. |
 | Apply wallpaper property preset | Applies a saved preset to its owning wallpaper on every display using it; rejects unapplied editor drafts. |
 | Apply display layout | Restores the saved wallpaper arrangement across its named displays, with full preflight and verified failure recovery. |
-| Open | Brings up the control panel, on Installed, Discover, pixiv or Settings when named. |
+| Open | Brings up the control panel, on Installed, Steam Workshop (`page=discover`), pixiv or Settings when named. |
 | Remove from display | Menu bar only, with no link: takes whatever the named display shows off it and leaves it empty, so its playlist waits ([a display you cleared](playlists.md#a-display-you-cleared)). It takes the display's turn in the command queue and removes what the display shows then; an empty display is left as it is. |
 
 Previous, Next, Random Wallpaper, Apply Wallpaper and Apply Saved Playlist act on the panel's target display unless a display is named, and
@@ -107,16 +139,17 @@ the foot of the menu bar menu; the Shortcuts app shows its own.
 
 ## Keyboard shortcuts
 
-**Settings → General → Keyboard shortcuts** records one shortcut each for
+**Settings → Keyboard shortcuts** records one shortcut each for
 **Play or pause wallpapers**, **Mute or unmute wallpapers**, **Previous wallpaper**, **Next wallpaper**, **Random wallpaper** (from every
 wallpaper, on the target display) and **Open the control panel**.
 None is set until recorded, so the app never takes a combination another app
 expects. **Record…** takes the next key pressed in that row (Escape alone, or
 moving focus away, gives up); the key must be held with ⌘, ⌥ or ⌃, except F13
-to F20, which type nothing and may stand alone. The page sends the key's position
-(`KeyboardEvent.code`), which `GlobalHotKeys` maps to Carbon's virtual key code,
-so a shortcut stays on the same key whatever the keyboard layout. One combination
-serves one action.
+to F20, which type nothing and may stand alone. The recorder takes the key's
+position (`NSEvent.keyCode`, which is Carbon's virtual key code), which
+`GlobalHotKeys.hotKey(keyCode:modifierFlags:)` checks against the keys a shortcut
+may use, so a shortcut stays on the same key whatever the keyboard layout. One
+combination serves one action.
 
 `GlobalHotKeys` registers them with `RegisterEventHotKey`, which works whichever
 app is in front, needs no Accessibility permission and delivers only those
@@ -193,7 +226,7 @@ any case; any other value, or a name given twice, is refused rather than guessed
 
 A link with an unknown command, a query value the command does not take, a value
 given twice, or a path is ignored and logged rather than guessed at. A browser
-asks before it opens the app. **Settings → General → Shortcuts app and links**
+asks before it opens the app. **Settings → Keyboard shortcuts → Shortcuts app and links**
 lists the links. Plan and preset IDs are the IDs in their saved records, not their
 display names; Shortcuts supplies name-based pickers without requiring these IDs.
 
@@ -215,14 +248,16 @@ leaving the round alone, the pick made when the display's turn comes), waiting f
 reaching the caller (`AppAutomationTests`), hotkey preferences and the key-code and
 modifier mapping (`HotKeyPreferencesTests`, `GlobalHotKeysTests`), the mute preference and how it
 joins the audio suppression the bridge receives (`PlaybackPreferencesTests`,
-`PlaybackPolicyCompositionTests`; the Settings switch is in `WebPanelGeneralSettingsTests`), the planner, store and
+`PlaybackPolicyCompositionTests`; the Settings switch is in `PanelPerformanceSettingsTests`), the planner, store and
 scheduler (`WallpaperAutomationPlannerTests`, `WallpaperAutomationStoreTests`,
 `WallpaperAutomationSchedulerTests`: weekday rules, simultaneous events, appearance
 choices, DST, solar offsets crossing midnight, absent polar events, catch-up and retry
 against a fake clock and the real command queue, manual precedence including a rule
 giving way to a waiting or running manual command, Focus exit and
-interrupted recovery), native validation and queued manual playlist edits
-(`WebPanelPlaylistTests`), the offscreen rule editor (`ControlPanelAutomationTests`) and
+interrupted recovery), the panel's validation and queued manual playlist edits
+(`PanelPlaylistActionsTests`), the rule actions and editor (`PanelAutomationActionsTests`,
+`DisplaysSettingsModelTests`, `DisplaysSettingsDraftsTests`), the shortcut recorder
+(`PanelHotKeyActionsTests`, `ShortcutsRecorderModelTests`) and
 rule merging and rollback in backups (`WallpaperBackupTests`) each have their own suite;
 the Space tests are listed in [Spaces verification](spaces.md#storage-and-verification).
 The domain inventory is in [coverage](../testing/coverage.md).

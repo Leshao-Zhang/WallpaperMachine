@@ -34,10 +34,11 @@ final class WallpaperAutomationSchedulerTests: XCTestCase {
     }
     private func settle() async { for _ in 0..<70 { await Task.yield() } }
     private func target(_ id: String, _ kind: WallpaperAutomationTarget.Kind = .wallpaper) -> WallpaperAutomationTarget { .init(kind: kind, id: id) }
-    private func scheduler() -> WallpaperAutomationScheduler {
+    private func scheduler(appearanceCenter: NotificationCenter = NotificationCenter(),
+                           spaceMonitor: WallpaperSpaceMonitor? = nil) -> WallpaperAutomationScheduler {
         WallpaperAutomationScheduler(store: rules, focus: focus, displays: { Array(self.states.keys) }, targetDisplay: { self.targetDisplay },
             canRun: { _ in self.running }, capture: { self.states[$0]! }, queue: { display, action in
-                try await self.queue.run(slot: BridgeStore.activationSlot(displayId: display), origin: .automation, action)
+                try await self.queue.runReporting(slot: BridgeStore.activationSlot(displayId: display), origin: .automation, action)
             }, apply: { target, display in
                 self.changes.append((display, target))
                 if self.failures.contains(target.id) { throw AutomationError(message: "Fixture unavailable") }
@@ -54,8 +55,26 @@ final class WallpaperAutomationSchedulerTests: XCTestCase {
                 self.states[display]?.playlist = original.playlist
                 if !preserve { self.states[display]?.wallpaperID = original.wallpaperID }
             }, dark: { self.dark }, now: { self.clock }, calendar: calendar,
-            appearanceCenter: NotificationCenter(), sleep: { _ in try await Task.sleep(for: .seconds(3600)) },
-            spaceVisit: { self.spaceVisits[$0] })
+            appearanceCenter: appearanceCenter, sleep: { _ in try await Task.sleep(for: .seconds(3600)) },
+            spaceMonitor: spaceMonitor, spaceVisit: { self.spaceVisits[$0] })
+    }
+
+    func testAppearanceAndSpaceInputsReportDistinctNotificationsWithoutChangingSelection() {
+        let appearanceCenter = NotificationCenter()
+        let spaceMonitor = WallpaperSpaceMonitor()
+        let scheduler = scheduler(appearanceCenter: appearanceCenter, spaceMonitor: spaceMonitor)
+        var received: [Notification.Name] = []
+        scheduler.onInputsChanged = { received.append($0) }
+        scheduler.start()
+        defer { scheduler.stop() }
+
+        let appearanceChanged = Notification.Name("AppleInterfaceThemeChangedNotification")
+        appearanceCenter.post(name: appearanceChanged, object: nil)
+        NotificationCenter.default.post(name: WallpaperSpaceMonitor.didChangeNotification, object: spaceMonitor)
+
+        XCTAssertEqual(received, [appearanceChanged, WallpaperSpaceMonitor.didChangeNotification])
+        XCTAssertEqual(states["primary"]?.wallpaperID, "original")
+        XCTAssertTrue(changes.isEmpty)
     }
 
     func testTimeRulesCatchUpOnceWaitWhenPausedAndRespectManualChoice() async throws {
@@ -94,15 +113,85 @@ final class WallpaperAutomationSchedulerTests: XCTestCase {
         scheduler.evaluate(); await settle(); XCTAssertEqual(states["primary"]?.wallpaperID, "forest")
     }
 
+    func testADesktopWithoutAChoiceShowsDesktop1sAsANewDesktopDoes() async throws {
+        try rules.update("primary") { $0.mode = .spaces; $0.spaces = ["a": target("ocean"), "b": target("forest")] }
+        spaceVisits["primary"] = .init(spaceID: "b", token: "visit1", firstSpaceID: "a")
+        let scheduler = scheduler(); scheduler.start(); defer { scheduler.stop() }; await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "forest")
+
+        spaceVisits["primary"] = .init(spaceID: "new", token: "visit2", firstSpaceID: "a")
+        XCTAssertEqual(scheduler.pendingTarget(on: "primary"), target("ocean"), "the new desktop waits for Desktop 1's")
+        scheduler.evaluate(); await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "ocean")
+        XCTAssertNil(rules.configuration(for: "primary").spaces["new"], "following Desktop 1 saves nothing for the desktop")
+
+        try rules.update("primary") { $0.spaces["a"] = nil }
+        spaceVisits["primary"] = .init(spaceID: "b", token: "visit3", firstSpaceID: "a"); scheduler.evaluate(); await settle()
+        spaceVisits["primary"] = .init(spaceID: "new", token: "visit4", firstSpaceID: "a"); scheduler.evaluate(); await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "forest", "with no choice on Desktop 1 either, the display keeps what it shows")
+    }
+
+    func testADesktopFollowingDesktop1FollowsTheNewDesktop1WhenTheDesktopsAreReordered() async throws {
+        try rules.update("primary") { $0.mode = .spaces; $0.spaces = ["a": target("ocean"), "b": target("forest")] }
+        spaceVisits["primary"] = .init(spaceID: "new", token: "visit1", firstSpaceID: "a")
+        let scheduler = scheduler(); scheduler.start(); defer { scheduler.stop() }; await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "ocean")
+
+        // Desktop b is moved to the front while the person stays on the same desktop.
+        spaceVisits["primary"] = .init(spaceID: "new", token: "visit1", firstSpaceID: "b")
+        scheduler.evaluate(); await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "forest", "the desktop shows the new Desktop 1's wallpaper")
+    }
+
+    func testAWallpaperChosenByHandBecomesTheCurrentDesktopsOwn() async throws {
+        try rules.update("primary") { $0.mode = .spaces; $0.spaces = ["a": target("ocean"), "b": target("forest")] }
+        spaceVisits["primary"] = .init(spaceID: "a", token: "visit1")
+        let scheduler = scheduler(); scheduler.start(); defer { scheduler.stop() }; await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "ocean")
+
+        states["primary"]?.wallpaperID = "manual"
+        scheduler.noteManualChoice("primary", wallpaperID: "manual")
+        await settle()
+        XCTAssertEqual(rules.configuration(for: "primary").spaces["a"], target("manual"))
+        XCTAssertEqual(changes.map { $0.1.id }, ["ocean"], "what was chosen is on screen already")
+
+        spaceVisits["primary"] = .init(spaceID: "b", token: "visit2")
+        scheduler.evaluate(); await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "forest")
+        spaceVisits["primary"] = .init(spaceID: "a", token: "visit3")
+        scheduler.evaluate(); await settle()
+        XCTAssertEqual(states["primary"]?.wallpaperID, "manual", "coming back keeps the desktop's own wallpaper")
+
+        spaceVisits["primary"] = .init(spaceID: "new", token: "visit4")
+        scheduler.evaluate(); await settle()
+        states["primary"]?.wallpaperID = "picked"
+        scheduler.noteManualChoice("primary", wallpaperID: "picked")
+        XCTAssertEqual(rules.configuration(for: "primary").spaces["new"], target("picked"),
+                       "a desktop without a choice gets one")
+    }
+
+    func testAManualChoiceOutsideTheSpaceModeChangesNoDesktop() async throws {
+        try rules.update("primary") { $0.mode = .schedule; $0.spaces = [:] }
+        spaceVisits["primary"] = .init(spaceID: "a", token: "visit1")
+        let scheduler = scheduler(); scheduler.start(); defer { scheduler.stop() }; await settle()
+
+        scheduler.noteManualChoice("primary", wallpaperID: "manual")
+
+        XCTAssertTrue(rules.configuration(for: "primary").spaces.isEmpty)
+    }
+
     func testSpaceChoiceWaitsWhilePausedAndBlocksPosterPublicationUntilSettled() async throws {
         try rules.update("primary") { $0.mode = .spaces; $0.spaces["a"] = target("ocean") }
         spaceVisits["primary"] = .init(spaceID: "a", token: "visit1"); running = false
         let scheduler = scheduler(); scheduler.start(); defer { scheduler.stop() }; await settle()
         XCTAssertTrue(changes.isEmpty)
         XCTAssertFalse(scheduler.selectionIsSettled(on: "primary"))
+        XCTAssertEqual(scheduler.pendingTarget(on: "primary"), target("ocean"), "the desktop's choice waits")
+        XCTAssertFalse(scheduler.isApplying(on: "primary"), "it is not running while paused")
         running = true; scheduler.evaluate(); await settle()
         XCTAssertEqual(states["primary"]?.wallpaperID, "ocean")
         XCTAssertTrue(scheduler.selectionIsSettled(on: "primary"))
+        XCTAssertNil(scheduler.pendingTarget(on: "primary"))
     }
 
     func testFocusEndsOnlyAfterSpaceInformationRecoversAndUsesTheNewDesktopChoice() async throws {
@@ -242,6 +331,32 @@ final class WallpaperAutomationSchedulerTests: XCTestCase {
         await blocker.value; await manual.value; await settle()
         XCTAssertTrue(changes.isEmpty)
         XCTAssertEqual(states["primary"]?.wallpaperID, "manual")
+    }
+
+    /// An update reloading the display's files while a Focus wallpaper waits its turn takes the
+    /// Focus change's place in the line. Nothing the user chose replaced it, so it is applied
+    /// once the queue is free, and leaving Focus then restores what was there before.
+    func testAFocusChangeReplacedByAReloadWhileWaitingIsStillApplied() async throws {
+        let original = states["primary"]
+        var release: CheckedContinuation<Void, Never>?
+        let blocker = Task { await queue.run { await withCheckedContinuation { release = $0 } } }
+        await settle()
+        focus.set(nil, selection: .init(target: target("focus"), displayID: "primary"))
+        let scheduler = scheduler(); scheduler.start(); defer { scheduler.stop() }; await settle()
+        XCTAssertTrue(changes.isEmpty, "the Focus change waits behind the running command")
+
+        let reload = Task {
+            await queue.run(slot: BridgeStore.activationSlot(displayId: "primary"), origin: .updateReload) {}
+        }
+        await settle()
+        try XCTUnwrap(release).resume()
+        await blocker.value; _ = await reload.value; await settle()
+
+        XCTAssertEqual(states["primary"]?.wallpaperID, "focus")
+        XCTAssertNotNil(rules.focusRestore["primary"])
+        focus.set(nil); await settle()
+        XCTAssertEqual(states["primary"], original)
+        XCTAssertEqual(restores, 1)
     }
 
     func testARuleThatFindsAManualCommandWaitingGivesWayAndDoesNotRetry() async throws {

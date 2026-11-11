@@ -20,7 +20,7 @@ three hooks on `BridgeStore` that tell the hold when a switch starts, settles or
   previous picture is replaced at once when the new wallpaper has drawn.
 - The held picture is a still taken up to a quarter of a second before the switch. An
   animated wallpaper may therefore jump a little at the moment the new one appears.
-- With the experimental native video backend the same picture covers the new clip's window
+- With the native video player (the default for videos) the same picture covers the new clip's window
   until the clip shows its first frame, then fades out. That fade is the dissolve from the
   old wallpaper to the clip, whether the old one was a clip or a scene.
 - With a web wallpaper the same picture covers the new page's window until the page has
@@ -34,9 +34,8 @@ Held: any activation that goes through `BridgeStore.activateWallpaperAsync` (a t
 menu choice, a hotkey, a link, a Shortcuts action, a playlist or rule, a rotation on unlock,
 **Back**, **Random Wallpaper**, a wallpaper applied to every display, a saved display layout,
 **Copy or swap**) on a display that is showing a wallpaper, when the new
-wallpaper is drawn by the scene engine (a scene, or a video on the Compatibility backend), by
-a native video window (a video with **Native video preferred**) or by a web page window (a
-web wallpaper). A display mirroring the switched display is held with it.
+wallpaper is drawn by the scene engine (a scene), by a native video window (a plain video)
+or by a web page window (a web wallpaper). A display mirroring the switched display is held with it.
 
 Not held, because the old picture is not available or the successor is not a scene:
 
@@ -44,6 +43,10 @@ Not held, because the old picture is not available or the successor is not a sce
   display that is suspended (display sleep, a covered desktop, a pause rule, a lock), and
   any display whose surface does not answer within 250 ms (a paused or stalled renderer
   may not).
+- A desktop whose wallpaper the display keeps paused for it
+  ([different wallpaper for each desktop](spaces.md#keeping-each-desktops-wallpaper)): that
+  wallpaper runs on in the window already on the desktop, so there is no gap to cover. A kept
+  window is never the picture held for another switch either.
 - **Reapply wallpaper**, Retry for a scene that stopped, and the reload after an update:
   all three take the wallpaper off the display first, so there is no picture left to hold.
 - A host window that does not come: a still that no host picks up is released 8 seconds after
@@ -147,13 +150,13 @@ tests and a host without one behave as before):
   is up. `isReadyForDisplay` says a frame can be shown, not that it has been drawn, so the
   fade is what hides a frame or two of lag; if a desktop run shows a flash as the veil goes,
   the knob is `contentReady(after:)`.
-- *Refusal.* A clip the backend cannot honour is handed to the scene engine before any
-  window exists. The still stays armed, the scene the engine opens takes it through the
-  renderer's layer announcement, and the host's `engineSettled` call, made once the bridge
-  has answered (the engine has then presented the scene or failed), releases it. If the
-  engine presents nothing, the 8 s grace ends it.
-- *Failure.* A clip that cannot be played after admission closes its window and hands the
-  wallpaper to the scene engine; the hold is cancelled, because the window it sat on is gone.
+- *Refusal.* A clip nothing can play is refused before any window exists, and nothing takes it
+  over: the display is reported as failed. The still stays armed for a window of another host that
+  might still come, and the host's `engineSettled` call, made as the failure is reported, starts
+  the 8 s grace that ends it.
+- *Failure.* A clip that cannot be played after admission closes its window and the display is
+  reported as failed; the hold is cancelled, because the window it sat on is gone and nothing
+  succeeds it.
 - *Closing.* A window closed to be replaced hands its veil to the successor through `adopt`.
   A window closed with no clip to follow, because the wallpaper was ejected, went to another
   backend or its display was disconnected, calls `windowClosed`: a veil that sat on that
@@ -172,11 +175,16 @@ in a host without one):
   the Space posters take, show the page and never the picture. A reconcile that keeps the
   page (the same entry file and an unchanged project revision: a property push, a frame-rate
   or volume change, a refresh that found nothing new) builds no window and takes nothing.
-- *Release.* The page's `didFinish` calls `contentReady(after:)` with
-  `WebWallpaperHost.firstPaintSettle`, 500 ms: `didFinish` comes before the first meaningful
-  paint, which is also why the poster is read again two seconds later. The picture then fades
-  out over the page, and the fade hides what is left of the lag. A page that fails to load
-  calls `contentReady` at once.
+- *Release.* `didFinish` comes before the page's first frame, which is also why the poster is
+  read again two seconds later, so after it the host asks the page to confirm a frame
+  (`WebWallpaperPage.confirmFrame`): a one-point snapshot taken after the pending screen
+  updates, which WebKit returns only once it has drawn and committed a frame of the
+  document. The answer calls `contentReady` at once, and so does no answer within
+  `WebWallpaperHost.firstFrameLimit` (3 s; a page holding its main thread, a display that
+  draws nothing). Only when WebKit refuses the snapshot does the picture wait the old fixed
+  `firstPaintSettle`, 500 ms. A committed frame is the page's first, not its finished
+  picture: a page that builds itself after load still draws in steps under the fade. A page
+  that fails to load calls `contentReady` at once.
 - *Closing.* A window closed to be replaced hands its veil to the successor through `adopt`
   (a second switch before the first page loads moves the picture to the newest window). A
   window closed with no web successor, because the display now shows another backend's
@@ -222,9 +230,10 @@ with it but leaves one that waits for another backend's window or sits on a scen
 refusal keeps it armed for the scene engine until the bridge has answered and then releases
 it (or lets the grace end it), the old clip keeps playing while the replacement's file is
 read, a pass overtaken meanwhile stops nothing, and a host without a hold opens as before.
-`WebWallpaperHostLifecycleTests` drive the web host against real offscreen pages with a fake
-window: the replacement window carries the veil when it is presented and keeps it after the
-page has loaded until the 500 ms settle has passed, a page that cannot load releases it at
+`WebWallpaperFrameConfirmationTests` show the confirmation waiting for a frame a page holds
+back and answering at its limit when none comes. `WebWallpaperHostLifecycleTests` drive the web host against real offscreen pages with a fake
+window: the replacement window carries the veil when it is presented and keeps it until the
+page has loaded and committed a frame, with no timer, a page that cannot load releases it at
 once, a window closed with no page to follow takes its own veil with it (also for an entry
 file outside the project) but leaves one that waits for another backend's window or sits on a
 scene, a reconcile that keeps the page creates no veil, and a host without a hold opens as
@@ -238,7 +247,7 @@ Not established by any test: that a sublayer above a `CAMetalLayer` composites o
 drawables and hides the black placeholder; that scene, web and native surfaces answer the
 request quickly, including a paused renderer; how the still compares with the live frame it
 replaces; whether `isReadyForDisplay` alone is late enough that the veil does not come off a
-frame early on a real clip; whether 500 ms after `didFinish` is enough for a typical web
-project's first paint; how long the system picture shows between a web window closing and the
+frame early on a real clip; how much of a typical web project's picture its first committed
+frame already shows; how long the system picture shows between a web window closing and the
 next one opening, and between a scene and the page that replaces it; the fade, Reduce Motion,
 multi-display and mirror behavior on a real desktop. The checklist is in [manual smoke](../testing/manual-smoke.md#wallpaper-switching).

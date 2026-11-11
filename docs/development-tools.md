@@ -67,9 +67,21 @@ local under `artifacts/`, and do not commit them.
 - CPU hot spots and memory growth: Instruments Time Profiler and Allocations.
 - GPU/CPU scheduling and final Metal execution: Instruments Metal System Trace
   and Xcode Metal debugger. Correlate findings with renderer logs; Metal capture
-  does not directly explain all upstream Vulkan/shader translation behavior.
+  does not directly explain the shader translation behavior. With
+  `WALLPAPER_MACHINE_GPU_LABELS=1` (off by default) Native Metal names every command
+  buffer and encoder after the pass, target and layer it draws, so the trace attributes
+  GPU time per pass; `split` also times draws that share a render pass apart. The
+  recipe, label format and caveats are in
+  [GPU time per pass](testing/renderer.md#gpu-time-per-pass).
 - Power and energy claims: the procedure and comparison rules in
   [testing/power-benchmark.md](testing/power-benchmark.md).
+
+When inspecting native reference code, verify consequential floating-point constants
+against instruction data references and the original executable bytes. The installed
+headless Hex-Rays path has rendered an actual `0.5f` (`00 00 00 3f`) as `0.395f` in
+pseudocode even with matching executable/database input hashes and unmodified bytes.
+Keep the byte-level check with the task's evidence; a decimal literal in pseudocode
+alone is insufficient for a physics, projection or threshold rule.
 
 Debug and Release instances share the app bundle identifier. During desktop
 tests, target the PID of the exact executable under test and quit only that
@@ -81,11 +93,24 @@ poster installed until the next launch. Signals sent while the app is still laun
 are not handled. Discard performance comparisons if another copy starts, foreground
 visibility changes unexpectedly, or the presentation policy suspends playback.
 
-For offscreen WebKit visual checks, use `WKWebView.takeSnapshot`. A hidden native
-host's `NSView.cacheDisplay` can capture an earlier WebKit frame even after DOM
-geometry has settled; do not treat that cached image as current window output.
-Pair the WebKit snapshot with native content bounds and hit-testing. Neither
-proves a live full-screen or Split View Space transition.
+For an offscreen look at the control panel, a temporary test hosts the real view
+(`ControlPanelView`, `PanelRootView` over a test controller, or one page or inspector)
+in an unordered window from `ControlPanelWindow.make`, sets the window's own
+`appearance` for light or dark (never `NSApp.appearance`), lays it out with
+`layoutSubtreeIfNeeded()` and draws it with `bitmapImageRepForCachingDisplay(in:)`
+and `cacheDisplay(in:to:)`. Write the image to `FileManager.default.temporaryDirectory`
+and copy it out with the shell: test code never writes under `~/Documents`
+([conventions](conventions.md#tests)). Delete the test afterwards; screenshots are
+never committed. `ImageRenderer` draws only pure SwiftUI, so AppKit-backed parts
+(lists, text fields, the split view, the toolbar, `AnimatedPreview`) are missing from
+its output. What such a capture cannot show: the inspector column, an
+`NSGlassEffectView` that draws blank (render the inspector alone in an
+`NSHostingView` at its width instead), a list selection (drawn solid black),
+controls in their active colours (an unordered window is inactive, so switches,
+sliders and progress views are grey), sheets and popovers (an unordered window
+attaches none; render their content alone), hover, pressed and focus states, Reduce
+Motion and Reduce Transparency, VoiceOver, and full-screen or Split View
+transitions. Report those as unverified.
 
 ## Asset corpus and manual smoke
 

@@ -63,7 +63,8 @@ final class WorkshopDownload: Identifiable {
   fileprivate init(
     id: String, item: WorkshopItem?, account: String, rememberSession: Bool,
     sessionDirectory: URL, runtimeProvider: any SteamCMDRuntimeProviding, checkpointDirectory: URL? = nil,
-    networkMonitor: (any ProcessNetworkMonitoring)? = nil
+    networkMonitor: (any ProcessNetworkMonitoring)? = nil,
+    downloadRegion: @escaping @Sendable () -> SteamCMDDownloadRegion
   ) {
     self.id = id
     self.item = item
@@ -71,7 +72,7 @@ final class WorkshopDownload: Identifiable {
     self.rememberSession = rememberSession
     worker = WorkshopDownloader(
       sessionDirectory: sessionDirectory, runtimeProvider: runtimeProvider,
-      networkMonitor: networkMonitor, checkpointDirectory: checkpointDirectory)
+      networkMonitor: networkMonitor, checkpointDirectory: checkpointDirectory, downloadRegion: downloadRegion)
   }
 }
 
@@ -104,10 +105,17 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
   @ObservationIgnored private let sessionDirectory: URL
   @ObservationIgnored private let runtimeProvider: any SteamCMDRuntimeProviding
   @ObservationIgnored private let networkMonitorFactory: (@MainActor () -> any ProcessNetworkMonitoring)?
+  /// Where each SteamCMD run starts looking for download servers (`SteamCMDDownloadRegion`).
+  @ObservationIgnored private let downloadRegion: @Sendable () -> SteamCMDDownloadRegion
   @ObservationIgnored private var isShuttingDown = false
   @ObservationIgnored private var persistenceDirectory: URL?
   @ObservationIgnored private let wakeCenter: NotificationCenter
   @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+  /// Where failed runs leave what SteamCMD printed, beside the saved sign-in.
+  @ObservationIgnored let failureLog: SteamCMDFailureLog
+  /// Called when a job's SteamCMD ended before Steam accepted the sign-in and Steam gave no
+  /// reason, which is how an outdated SteamCMD fails; the store checks for a newer one.
+  @ObservationIgnored var onUnexplainedSignInFailure: (@MainActor (WorkshopDownload) -> Void)?
 
   private struct SavedDownload: Codable {
     let id: String
@@ -130,7 +138,7 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
       let job = WorkshopDownload(id: record.id, item: record.item, account: record.account,
         rememberSession: record.rememberSession, sessionDirectory: sessionDirectory,
         runtimeProvider: runtimeProvider, checkpointDirectory: checkpointDirectory(for: record.id),
-        networkMonitor: networkMonitorFactory?())
+        networkMonitor: networkMonitorFactory?(), downloadRegion: downloadRegion)
       job.isQueued = false
       job.isPaused = true
       downloads.append(job)
@@ -181,12 +189,16 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     runtimeProvider: any SteamCMDRuntimeProviding = SteamCMDRuntimeService(),
     maximumConcurrentDownloads: Int = WorkshopDownloadManager.defaultConcurrentDownloads,
     networkMonitorFactory: (@MainActor () -> any ProcessNetworkMonitoring)? = nil,
-    wakeCenter: NotificationCenter = NSWorkspace.shared.notificationCenter
+    wakeCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+    downloadRegion: @escaping @Sendable () -> SteamCMDDownloadRegion = { .current }
   ) {
     self.sessionDirectory = sessionDirectory
+    self.downloadRegion = downloadRegion
     self.runtimeProvider = runtimeProvider
     self.networkMonitorFactory = networkMonitorFactory
     self.wakeCenter = wakeCenter
+    failureLog = SteamCMDFailureLog(
+      url: sessionDirectory.deletingLastPathComponent().appendingPathComponent(SteamCMDFailureLog.fileName))
     self.maximumConcurrentDownloads = Self.clampedConcurrentDownloads(maximumConcurrentDownloads)
     savedAccount = WorkshopDownloader.readSavedAccount(at: sessionDirectory)
     // A connection often dies with the sleep; each running transfer checks that bytes still arrive.
@@ -290,6 +302,25 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     persist()
   }
 
+  /// **Download next**: moves a job that waits for a slot to the front of the line, ahead of
+  /// every other waiting job and behind those that run, so it starts at the next free slot.
+  /// The order is saved with the queue, so it outlives a relaunch.
+  func prioritize(_ job: WorkshopDownload) {
+    guard job.isQueued, !job.isPaused, let index = downloads.firstIndex(where: { $0 === job }),
+      let front = downloads.firstIndex(where: { $0.isQueued && !$0.isPaused }), front < index
+    else { return }
+    downloads.remove(at: index)
+    downloads.insert(job, at: front)
+    AppLog.info("Workshop download \(job.id) moved to the front of the queue")
+    persist()
+    startQueuedDownloads()
+  }
+
+  /// Whether `prioritize` would move `job`: it waits, and another waiting job is ahead of it.
+  func canPrioritize(_ job: WorkshopDownload) -> Bool {
+    job.isQueued && !job.isPaused && downloads.first(where: { $0.isQueued && !$0.isPaused }) !== job
+  }
+
   /// A prerequisite request owns this paused job until it can be enqueued again.
   /// Its content checkpoint remains available under the same stable id.
   func transferPausedToRequest(id: String) {
@@ -359,7 +390,8 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
     let job = WorkshopDownload(
       id: id, item: item, account: account, rememberSession: rememberSession,
       sessionDirectory: sessionDirectory, runtimeProvider: runtimeProvider,
-      checkpointDirectory: checkpointDirectory(for: id), networkMonitor: networkMonitorFactory?())
+      checkpointDirectory: checkpointDirectory(for: id), networkMonitor: networkMonitorFactory?(),
+      downloadRegion: downloadRegion)
     job.begin = { [weak job] in
       guard let job else { return }
       begin(job.worker, account)
@@ -378,10 +410,14 @@ final class WorkshopDownloadManager: SteamCMDDownloadActivity {
         job.isPaused = false
         job.wasCancelled = false
       }
+      if let output = job.worker.failureOutput { self.failureLog.append(output) }
       self.settleSessionConflict(for: job)
       if !job.isQueued && !job.isPaused { job.begin = nil }
       self.persist()
       self.startQueuedDownloads()
+      if job.worker.endedBeforeSignInUnexplained, !job.isCancelled, !self.isShuttingDown {
+        self.onUnexplainedSignInFailure?(job)
+      }
     }
     let previous = downloads
     if let index = downloads.firstIndex(where: { $0.id == job.id }) { downloads[index] = job }

@@ -14,9 +14,35 @@ final class WallpaperSpaceMonitorTests: XCTestCase {
         XCTAssertEqual(result["1"]?.spaces.map(\.id), ["a", "b"])
         XCTAssertEqual(result["1"]?.current, "a")
         XCTAssertEqual(result["2"]?.current, "c")
+        XCTAssertEqual(result["1"]?.currentManagedID, 1, "the window server's number for the current desktop")
+        XCTAssertEqual(result["1"]?.spaces.map(\.managedID), [1, 2], "and for every other desktop, to keep a window on")
         let reordered = try XCTUnwrap(WallpaperSpaceMonitor.decode(groups: [group(order: ["b", "a"])], displays: ["1": "uuid-screen"]))
         XCTAssertEqual(reordered["1"]?.current, "a")
         XCTAssertEqual(reordered["1"]?.spaces.first(where: { $0.id == "a" })?.number, 2)
+    }
+
+    func testPrimaryDesktopWithEmptyUUIDDecodesAsDefaultAndTracksCurrentDesktop() throws {
+        let primary: [String: Any] = [
+            "Display Identifier": "uuid-screen",
+            "Current Space": ["ManagedSpaceID": 1, "id64": 1, "type": 0, "uuid": ""],
+            "Spaces": [
+                ["ManagedSpaceID": 1, "id64": 1, "type": 0, "uuid": ""],
+                ["ManagedSpaceID": 5, "id64": 5, "type": 0, "uuid": "space-b"],
+            ],
+        ]
+        let result = try XCTUnwrap(WallpaperSpaceMonitor.decode(groups: [primary], displays: ["1": "uuid-screen"]))
+        XCTAssertEqual(result["1"]?.spaces, [
+            .init(id: "default", number: 1, managedID: 1),
+            .init(id: "space-b", number: 2, managedID: 5),
+        ])
+        XCTAssertEqual(result["1"]?.current, "default")
+        XCTAssertEqual(result["1"]?.currentManagedID, 1)
+
+        var withoutManagedID = primary
+        withoutManagedID["Current Space"] = ["type": 0, "uuid": ""]
+        XCTAssertEqual(
+            WallpaperSpaceMonitor.decode(groups: [withoutManagedID], displays: ["1": "uuid-screen"])?["1"]?.current,
+            "default")
     }
 
     func testSharedMainGroupAndFullscreenCurrentSpace() throws {
@@ -27,6 +53,7 @@ final class WallpaperSpaceMonitorTests: XCTestCase {
         XCTAssertEqual(Set(result.keys), ["1", "2"])
         XCTAssertEqual(result["1"]?.spaces.map(\.id), ["a"])
         XCTAssertNil(result["1"]?.current)
+        XCTAssertNil(result["1"]?.currentManagedID, "no desktop to move a window to on a full-screen Space")
     }
 
     func testMalformedAndAmbiguousGroupsFailWithoutInventingASpace() {
@@ -38,6 +65,7 @@ final class WallpaperSpaceMonitorTests: XCTestCase {
         XCTAssertNil(WallpaperSpaceMonitor.decode(groups: [input], displays: ["1": "uuid-screen"]))
         XCTAssertNil(WallpaperSpaceMonitor.decode(groups: [group(), group()], displays: ["1": "uuid-screen"]))
         XCTAssertNil(WallpaperSpaceMonitor.decode(groups: [group(order: ["a", "a"])], displays: ["1": "uuid-screen"]))
+        XCTAssertNil(WallpaperSpaceMonitor.decode(groups: [group(order: ["", ""])], displays: ["1": "uuid-screen"]))
     }
 
     func testVisitsPersistAcrossRelaunchAndChangeOnlyWhenTheDesktopChanges() throws {
@@ -45,9 +73,12 @@ final class WallpaperSpaceMonitorTests: XCTestCase {
         var value: [String: WallpaperDisplaySpaces]? = ["1": .init(displayUUID: "screen", spaces: [.init(id: "a", number: 1), .init(id: "b", number: 2)], current: "a")]
         let monitor = WallpaperSpaceMonitor(defaults: defaults, provider: { value }); defer { monitor.stop() }
         monitor.refresh()
-        let first = try XCTUnwrap(monitor.visit(for: "1"))
+        let before = try XCTUnwrap(monitor.visit(for: "1"))
+        XCTAssertEqual(before.firstSpaceID, "a")
         value?["1"]?.spaces.reverse(); monitor.refresh()
-        XCTAssertEqual(monitor.visit(for: "1"), first)
+        let first = try XCTUnwrap(monitor.visit(for: "1"))
+        XCTAssertEqual([first.spaceID, first.token], [before.spaceID, before.token], "reordering is not a different desktop visit")
+        XCTAssertEqual(first.firstSpaceID, "b", "Desktop 1 is whichever desktop comes first now")
         let relaunched = WallpaperSpaceMonitor(defaults: defaults, provider: { value }); defer { relaunched.stop() }
         relaunched.refresh()
         XCTAssertEqual(relaunched.visit(for: "1"), first)

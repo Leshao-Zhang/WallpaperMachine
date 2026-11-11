@@ -25,6 +25,19 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Sendable {
     static func pageURL(id: String) -> URL { URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)")! }
 }
 
+/// One comment on a Workshop item, as plain text; Steam's text, never a catalog key.
+struct WorkshopComment: Equatable, Sendable {
+    let author: String
+    let date: Date?
+    let text: String
+}
+
+/// The newest comments on an item and how many it has in all.
+struct WorkshopComments: Equatable, Sendable {
+    let total: Int
+    let comments: [WorkshopComment]
+}
+
 enum WorkshopKind: String, CaseIterable, Identifiable, Sendable {
     case all = "All types", scene = "Scene", video = "Video", web = "Web", application = "Application"
     var id: String { rawValue }
@@ -112,51 +125,87 @@ struct WorkshopLayoutChanged: LocalizedError, Sendable {
     var errorDescription: String? { Self.message }
 }
 
+/// Steam answered the browse query with `eresult` 10 (busy): its Workshop search had more
+/// queries queued than it takes. Not a layout change; `WorkshopService` asks again before
+/// showing it.
+struct WorkshopBusy: LocalizedError, Sendable {
+    static var message: String { String(localized: "Steam’s Workshop is busy. Try again in a moment.") }
+    var errorDescription: String? { Self.message }
+}
+
 actor WorkshopService {
     /// Steam's public browse page clamps `numperpage` to 30 and `total_pages` to 1000, so a single
     /// query can only ever expose the first 30,000 results; the panel explains that cap.
     static let pageSize = 30
     static let maxPages = 1000
     private let session: URLSession
+    /// The pauses before each new request for a browse page Steam answered busy.
+    private let busyRetryDelays: [Duration]
 
-    init(session: URLSession = .shared) { self.session = session }
+    init(session: URLSession = .shared, busyRetryDelays: [Duration] = [.seconds(1), .seconds(3)]) {
+        self.session = session
+        self.busyRetryDelays = busyRetryDelays
+    }
 
     static func browseURL(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = [],
                           excludedTags: [String] = [], section: String = "readytouseitems") -> URL {
-        var url = URLComponents(string: "https://steamcommunity.com/workshop/browse/")!
-        url.queryItems = [
-            URLQueryItem(name: "appid", value: "431960"),
-            URLQueryItem(name: "section", value: section),
-            URLQueryItem(name: "browsesort", value: sort.browseSort),
-            URLQueryItem(name: "searchtext", value: search),
-            URLQueryItem(name: "p", value: String(max(1, page))),
-            URLQueryItem(name: "numperpage", value: String(Self.pageSize)),
-            URLQueryItem(name: "days", value: String(sort.days)),
-            URLQueryItem(name: "l", value: "english")
+        var items: [(String, String)] = [
+            ("appid", String(WorkshopApp.id)),
+            ("section", section),
+            ("browsesort", sort.browseSort),
+            ("searchtext", search),
+            ("p", String(max(1, page))),
+            ("numperpage", String(pageSize)),
+            ("days", String(sort.days)),
+            ("l", "english"),
         ]
-        if kind != .all { url.queryItems?.append(URLQueryItem(name: "requiredtags[]", value: kind.rawValue)) }
-        // Steam requires every selected tag, including the wallpaper type.
-        var seen: Set<String> = kind == .all ? [] : [kind.rawValue]
-        for tag in tags where seen.insert(tag).inserted {
-            url.queryItems?.append(URLQueryItem(name: "requiredtags[]", value: tag))
-        }
-        // Steam drops an item carrying any excluded tag; a tag that is also required would
-        // empty the result, so it is not sent as excluded.
-        var excluded: Set<String> = []
-        for tag in excludedTags where !seen.contains(tag) && excluded.insert(tag).inserted {
-            url.queryItems?.append(URLQueryItem(name: "excludedtags[]", value: tag))
-        }
-        return url.url!
+        var required: [String] = []
+        if kind != .all { required.append(kind.rawValue) }
+        for tag in tags where !required.contains(tag) { required.append(tag) }
+        items += required.map { ("requiredtags[]", $0) }
+        var excluded: [String] = []
+        for tag in excludedTags where !required.contains(tag) && !excluded.contains(tag) { excluded.append(tag) }
+        items += excluded.map { ("excludedtags[]", $0) }
+
+        // Every value is escaped down to unreserved characters: `URLComponents` would leave `+`
+        // (a space to Steam), and a search such as "rain & snow" must stay one parameter.
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "steamcommunity.com"
+        components.path = "/workshop/browse/"
+        components.percentEncodedQuery = items.map { name, value in
+            (name.addingPercentEncoding(withAllowedCharacters: unreserved) ?? name) + "="
+                + (value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "")
+        }.joined(separator: "&")
+        return components.url!
     }
 
+    /// One browse page. With `account` Steam lists what it shows that account (the age-rated
+    /// items its content preferences allow, as its region allows); without, what it shows anyone.
     func browse(search: String, kind: WorkshopKind, sort: WorkshopSort, page: Int, tags: [String] = [],
-                excludedTags: [String] = []) async throws -> WorkshopPage {
-        let html = try await communityPage(Self.browseURL(search: search, kind: kind, sort: sort, page: page, tags: tags,
-                                                          excludedTags: excludedTags))
-        do {
-            return try Self.decodePage(html)
-        } catch let changed as WorkshopLayoutChanged {
-            return try await degradedPage(html: html, page: page, original: changed)
+                excludedTags: [String] = [], account: SteamWebSession? = nil) async throws -> WorkshopPage {
+        let url = Self.browseURL(search: search, kind: kind, sort: sort, page: page, tags: tags, excludedTags: excludedTags)
+        let (html, decoded) = try await browsePage(url, account: account) { html -> (String, WorkshopPage?) in
+            do { return (html, try Self.decodePage(html)) } catch is WorkshopLayoutChanged { return (html, nil) }
+        }
+        if let decoded { return decoded }
+        return try await degradedPage(html: html, page: page, original: WorkshopLayoutChanged())
+    }
+
+    /// A browse page, decoded. While Steam answers it busy the page is requested again after
+    /// each of `busyRetryDelays`; after the last, `WorkshopBusy` stands.
+    private func browsePage<T>(
+        _ url: URL, account: SteamWebSession?, decode: (String) throws -> T
+    ) async throws -> T {
+        var delays = busyRetryDelays[...]
+        while true {
+            let html = try await communityPage(url, account: account)
+            do {
+                return try decode(html)
+            } catch is WorkshopBusy where !delays.isEmpty {
+                try await Task.sleep(for: delays.removeFirst())
+            }
         }
     }
 
@@ -195,7 +244,7 @@ actor WorkshopService {
             request.setValue("steamLoginSecure=\(account.cookie)", forHTTPHeaderField: "Cookie")
             redirects = SteamCookieRedirectGuard()
         }
-        let (data, response) = try await session.data(for: request, delegate: redirects)
+        let (data, response) = try await fetch(request, delegate: redirects)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw WorkshopFailure(message: String(localized: "Steam could not load the Workshop. Check your connection or open Steam in your browser, then retry."))
@@ -204,6 +253,19 @@ actor WorkshopService {
             throw WorkshopFailure(message: String(localized: "Steam returned an unreadable Workshop page. Try again or browse on Steam."))
         }
         return html
+    }
+
+    /// Every Steam request goes through here, so a connection the network cut off or refused
+    /// says how to route Steam through a proxy instead of showing the system's "An SSL error has
+    /// occurred"; any other failure, cancellation included, is thrown as it is.
+    private func fetch(
+        _ request: URLRequest, delegate: (any URLSessionTaskDelegate)? = nil
+    ) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: request, delegate: delegate)
+        } catch {
+            throw ConnectionInterrupted.explaining(error, site: request.url?.host ?? "steamcommunity.com")
+        }
     }
 
     /// The Steam session cookie goes to steamcommunity.com over HTTPS and nowhere else.
@@ -219,6 +281,41 @@ actor WorkshopService {
         return request
     }
 
+    /// Where Steam trades a session's renewal token for a new `steamLoginSecure` token.
+    static let renewalURL = URL(string: "https://api.steampowered.com/IAuthenticationService/GenerateAccessTokenForApp/v1/")!
+
+    /// The session with a new cookie, from Steam's token service. The renewal token goes there
+    /// alone, in the body of a request that follows no redirect. Steam refusing it, or a session
+    /// without one, throws `SteamSignInRequired`; a connection failure throws its own error.
+    func renew(_ account: SteamWebSession) async throws -> SteamWebSession {
+        guard let refreshToken = account.refreshToken else { throw SteamSignInRequired() }
+        var request = URLRequest(url: Self.renewalURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 35
+        request.httpShouldHandleCookies = false
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var form = URLComponents()
+        form.queryItems = [
+            URLQueryItem(name: "refresh_token", value: refreshToken),
+            URLQueryItem(name: "steamid", value: account.steamID),
+        ]
+        request.httpBody = Data((form.percentEncodedQuery ?? "").utf8)
+        let (data, response) = try await fetch(request, delegate: SteamNoRedirects())
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw SteamSignInRequired() }
+        if http.statusCode == 401 || http.statusCode == 403 { throw SteamSignInRequired() }
+        guard (200..<300).contains(http.statusCode) else {
+            throw WorkshopFailure(message: String(localized: "Steam could not load the Workshop. Check your connection or open Steam in your browser, then retry."))
+        }
+        // Steam answers a refused token with an empty response and the reason in a header.
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let body = root["response"] as? [String: Any],
+              let token = body["access_token"] as? String,
+              let renewed = account.renewed(accessToken: token)
+        else { throw SteamSignInRequired() }
+        return renewed
+    }
+
     /// Steam's public details endpoint answers up to this many items per request without a key.
     static let detailsBatchSize = 100
 
@@ -232,7 +329,7 @@ actor WorkshopService {
             try Task.checkCancellation()
             let batch = Array(ids[start..<min(ids.count, start + Self.detailsBatchSize)])
             start += batch.count
-            let (data, response) = try await session.data(for: Self.detailsRequest(ids: batch))
+            let (data, response) = try await fetch(Self.detailsRequest(ids: batch))
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw WorkshopFailure(message: String(localized: "Steam did not answer the request for Workshop details. Check your connection and try again."))
             }
@@ -289,7 +386,7 @@ actor WorkshopService {
     /// The one tile for a Workshop item named by a pasted link or id, as a page of one. The
     /// sidebar's age rating and tags are not applied: the item was asked for by name.
     func itemPage(id: String) async throws -> WorkshopPage {
-        let (data, response) = try await session.data(for: Self.detailsRequest(ids: [id]))
+        let (data, response) = try await fetch(Self.detailsRequest(ids: [id]))
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw WorkshopFailure(message: String(localized: "Steam did not answer the request for Workshop details. Check your connection and try again."))
         }
@@ -325,7 +422,8 @@ actor WorkshopService {
 
     /// One page of `query`'s source. Steam filters and sorts the browse and collections pages
     /// itself; the other sources are listed in their own order and filtered here with the same
-    /// rules, so a page can hold fewer than `pageSize` tiles.
+    /// rules, so a page can hold fewer than `pageSize` tiles. `account` is required for the
+    /// account's own lists, and read with on Steam Community pages when there is one.
     func page(for query: WorkshopQuery, page: Int, account: SteamWebSession?) async throws -> WorkshopPage {
         switch query.source {
         case .browse:
@@ -333,14 +431,15 @@ actor WorkshopService {
             if let id = query.itemID { return try await itemPage(id: id) }
             return try await browse(
                 search: query.text, kind: query.kind, sort: query.sort, page: page, tags: query.tags,
-                excludedTags: query.excludedTags)
+                excludedTags: query.excludedTags, account: account)
         case .collections:
             return try await collections(
-                search: query.text, sort: query.sort, page: page, tags: query.tags, excludedTags: query.excludedTags)
+                search: query.text, sort: query.sort, page: page, tags: query.tags, excludedTags: query.excludedTags,
+                account: account)
         case .collection(let id, _):
             return try await collectionPage(id: id, page: page, tags: query.tags, excludedTags: query.excludedTags)
         case .creator(let id, let name):
-            var listing = try await profilePage(steamID: id, subscriptions: false, account: nil, page: page)
+            var listing = try await profilePage(steamID: id, list: .items, account: account, page: page)
             let author = listing.name ?? name
             listing.page = Self.matching(listing.page, tags: query.tags, excludedTags: query.excludedTags)
             listing.page.items = listing.page.items.map { item in
@@ -350,9 +449,11 @@ actor WorkshopService {
             }
             listing.page.title = author
             return listing.page
-        case .subscriptions:
+        case .subscriptions, .favorites:
             guard let account else { throw SteamSignInRequired() }
-            let listing = try await profilePage(steamID: account.steamID, subscriptions: true, account: account, page: page)
+            let list: WorkshopProfileList =
+                query.source == .favorites ? .favorites(query.favoritesOrder) : .subscriptions
+            let listing = try await profilePage(steamID: account.steamID, list: list, account: account, page: page)
             return Self.matching(listing.page, tags: query.tags, excludedTags: query.excludedTags)
         }
     }
@@ -378,12 +479,12 @@ actor WorkshopService {
     /// hidden tag, and it has a wallpaper to look at: collections are rarely tagged, and a title
     /// and a cover are enough to show what a hidden rating hides.
     func collections(
-        search: String, sort: WorkshopSort, page: Int, tags: [String], excludedTags: [String]
+        search: String, sort: WorkshopSort, page: Int, tags: [String], excludedTags: [String],
+        account: SteamWebSession? = nil
     ) async throws -> WorkshopPage {
-        let html = try await communityPage(Self.browseURL(
+        var (listing, children) = try await browsePage(Self.browseURL(
             search: search, kind: .all, sort: sort, page: page, tags: tags, excludedTags: excludedTags,
-            section: "collections"))
-        var (listing, children) = try Self.decodeBrowse(html)
+            section: "collections"), account: account, decode: Self.decodeBrowse)
         guard Self.screensRatings(tags: tags, excludedTags: excludedTags) else { return listing }
         let excluded = Self.hiddenTags(tags: tags, excludedTags: excludedTags)
         var samples: [String: [String]] = [:]
@@ -402,7 +503,7 @@ actor WorkshopService {
     /// collection inside it is shown as a collection unless an age rating is hidden, when there
     /// is nothing to vouch for what it holds.
     func collectionPage(id: String, page: Int, tags: [String], excludedTags: [String]) async throws -> WorkshopPage {
-        let (data, response) = try await session.data(for: Self.collectionRequest(id: id))
+        let (data, response) = try await fetch(Self.collectionRequest(id: id))
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw WorkshopFailure(message: String(localized: "Steam did not answer the request for Workshop details. Check your connection and try again."))
         }
@@ -442,7 +543,7 @@ actor WorkshopService {
             .compactMap { $0["publishedfileid"] as? String }
     }
 
-    static func profileURL(steamID: String, subscriptions: Bool, page: Int) -> URL {
+    static func profileURL(steamID: String, list: WorkshopProfileList, page: Int) -> URL {
         var url = URLComponents(string: "https://steamcommunity.com/profiles/\(steamID)/myworkshopfiles/")!
         url.queryItems = [
             URLQueryItem(name: "appid", value: String(WorkshopApp.id)),
@@ -450,20 +551,148 @@ actor WorkshopService {
             URLQueryItem(name: "numperpage", value: String(Self.pageSize)),
             URLQueryItem(name: "l", value: "english"),
         ]
-        if subscriptions { url.queryItems?.append(URLQueryItem(name: "browsefilter", value: "mysubscriptions")) }
+        switch list {
+        case .items: break
+        case .subscriptions:
+            url.queryItems?.append(URLQueryItem(name: "browsefilter", value: "mysubscriptions"))
+        case .favorites(let order):
+            url.queryItems? += [
+                URLQueryItem(name: "browsefilter", value: "myfavorites"),
+                URLQueryItem(name: "sortmethod", value: order.rawValue),
+            ]
+        }
         return url.url!
     }
 
-    /// One page of an account's Workshop items, or of its subscriptions, with the account's name.
+    // MARK: Subscriptions and comments
+
+    /// Subscribes the signed-in account to `itemID` on Steam, or unsubscribes it: a POST to
+    /// steamcommunity.com with the session and a CSRF token, which Steam checks against a cookie of
+    /// the same value, so a fresh random one serves. The request follows no redirect off
+    /// steamcommunity.com with the cookie. Steam's sign-in page, or a refusal of the session,
+    /// throws `SteamSignInRequired`; any other answer than success throws `WorkshopFailure`.
+    func setSubscribed(_ subscribed: Bool, itemID: String, account: SteamWebSession) async throws {
+        guard !itemID.isEmpty, itemID.allSatisfy({ $0.isASCII && $0.isNumber }) else {
+            throw WorkshopFailure(message: String(localized: "Choose a valid numeric Workshop item identifier."))
+        }
+        let url = URL(string: "https://steamcommunity.com/sharedfiles/\(subscribed ? "subscribe" : "unsubscribe")")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 35
+        request.setValue("WallpaperMachine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let token = Self.csrfToken()
+        request.httpShouldHandleCookies = false
+        request.setValue("steamLoginSecure=\(account.cookie); sessionid=\(token)", forHTTPHeaderField: "Cookie")
+        request.httpBody = Data("id=\(itemID)&appid=431960&sessionid=\(token)".utf8)
+        let (data, response) = try await fetch(request, delegate: SteamCookieRedirectGuard())
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw SteamSignInRequired() }
+        if http.statusCode == 401 || http.statusCode == 403 { throw SteamSignInRequired() }
+        if (200..<300).contains(http.statusCode),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let success = object["success"] as? Int {
+            guard success == 1 else {
+                throw WorkshopFailure(message: subscribed
+                    ? String(localized: "Steam did not subscribe you to this item. Try again, or subscribe on its Steam page.")
+                    : String(localized: "Steam did not unsubscribe you from this item. Try again, or unsubscribe on its Steam page."))
+            }
+            return
+        }
+        let page = String(decoding: data.prefix(200_000), as: UTF8.self)
+        if (Self.firstMatch(#"<title>([^<]*)</title>"#, in: page) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == "Sign In" {
+            throw SteamSignInRequired()
+        }
+        throw WorkshopFailure(message: String(localized: "Steam could not be reached to change your subscription. Check your connection and try again."))
+    }
+
+    /// A value for Steam's `sessionid` CSRF check: 24 random hexadecimal digits.
+    static func csrfToken() -> String {
+        (0..<12).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    }
+
+    /// The newest comments on an item, from Steam's public comment thread (no sign-in, no
+    /// cookie), with how many there are in all. `creatorID` is the author's SteamID, which names
+    /// the thread.
+    func comments(itemID: String, creatorID: String, count: Int = 10) async throws -> WorkshopComments {
+        guard !itemID.isEmpty, itemID.allSatisfy({ $0.isASCII && $0.isNumber }), SteamWebSession.isSteamID(creatorID) else {
+            throw WorkshopFailure(message: String(localized: "Steam has no comments to show for this item."))
+        }
+        var components = URLComponents(string: "https://steamcommunity.com/comment/PublishedFile_Public/render/\(creatorID)/\(itemID)/")!
+        components.queryItems = [URLQueryItem(name: "start", value: "0"), URLQueryItem(name: "count", value: String(max(1, min(count, 50))))]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 35
+        request.httpShouldHandleCookies = false
+        request.setValue("WallpaperMachine/1.0 (macOS; public Workshop browser)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await fetch(request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              data.count < 4_000_000,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let html = object["comments_html"] as? String
+        else {
+            throw WorkshopFailure(message: String(localized: "Steam’s comments could not be read. Try again, or read them on the item’s Steam page."))
+        }
+        let comments = Self.decodeComments(html)
+        let total = (object["total_count"] as? Int) ?? comments.count
+        return WorkshopComments(total: max(total, comments.count), comments: comments)
+    }
+
+    /// The comments of a thread's HTML, each as plain text: markup dropped, line breaks kept,
+    /// entities decoded and the ends trimmed.
+    static func decodeComments(_ html: String) -> [WorkshopComment] {
+        let blocks = html.components(separatedBy: #"class="commentthread_comment "#).dropFirst()
+        return blocks.compactMap { block -> WorkshopComment? in
+            guard let body = firstMatch(#"(?s)class="commentthread_comment_text"[^>]*>(.*?)</div>"#, in: block) else { return nil }
+            let text = plainText(body)
+            guard !text.isEmpty else { return nil }
+            let author = firstMatch(#"(?s)commentthread_author_link[^>]*>\s*<bdi>(.*?)</bdi>"#, in: block).map(plainText) ?? ""
+            let date = firstMatch(#"data-timestamp="(\d+)""#, in: block).flatMap(TimeInterval.init).map(Date.init(timeIntervalSince1970:))
+            return WorkshopComment(author: author, date: date, text: text)
+        }
+    }
+
+    /// Text of an HTML fragment: white space in the markup is one space, as a browser shows it, a
+    /// `<br>` is a line break, every other tag is dropped, entities are decoded and each line's
+    /// ends are trimmed.
+    static func plainText(_ html: String) -> String {
+        var text = html.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?i)<br\s*/?>"#, with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
+        text = decodeNumericEntities(unescapeHTML(text))
+        let lines = text.components(separatedBy: "\n").map {
+            $0.replacingOccurrences(of: #"[ \t\r]+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// `&#NNN;` and `&#xHH;` as the characters they name.
+    private static func decodeNumericEntities(_ text: String) -> String {
+        guard text.contains("&#"), let regex = try? NSRegularExpression(pattern: #"&#(x?)([0-9A-Fa-f]+);"#) else { return text }
+        var result = ""
+        var last = text.startIndex
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let whole = Range(match.range, in: text), let hex = Range(match.range(at: 1), in: text),
+                  let digits = Range(match.range(at: 2), in: text) else { continue }
+            result += text[last..<whole.lowerBound]
+            let value = UInt32(text[digits], radix: text[hex].isEmpty ? 10 : 16)
+            result += value.flatMap(Unicode.Scalar.init).map { String(Character($0)) } ?? String(text[whole])
+            last = whole.upperBound
+        }
+        return result + text[last...]
+    }
+
+    /// One page of an account's Workshop items, subscriptions or favorites, with the account's name.
     func profilePage(
-        steamID: String, subscriptions: Bool, account: SteamWebSession?, page: Int
+        steamID: String, list: WorkshopProfileList, account: SteamWebSession?, page: Int
     ) async throws -> (page: WorkshopPage, name: String?) {
         guard SteamWebSession.isSteamID(steamID) else {
             throw WorkshopFailure(message: String(localized: "This Steam account id is not one Steam uses."))
         }
         let html = try await communityPage(
-            Self.profileURL(steamID: steamID, subscriptions: subscriptions, page: page), account: account)
-        let listing = try Self.decodeProfileListing(html)
+            Self.profileURL(steamID: steamID, list: list, page: page), account: account)
+        let listing = try Self.decodeProfileListing(html, requiresSignIn: list != .items)
         let items = try await details(ids: listing.ids)
         let totalPages = max(1, (listing.total + Self.pageSize - 1) / Self.pageSize)
         return (WorkshopPage(items: items, page: max(1, page), totalPages: min(totalPages, Self.maxPages), totalCount: listing.total), listing.name)
@@ -477,8 +706,8 @@ actor WorkshopService {
         repeat {
             try Task.checkCancellation()
             let html = try await communityPage(
-                Self.profileURL(steamID: account.steamID, subscriptions: true, page: page), account: account)
-            let listing = try Self.decodeProfileListing(html)
+                Self.profileURL(steamID: account.steamID, list: .subscriptions, page: page), account: account)
+            let listing = try Self.decodeProfileListing(html, requiresSignIn: true)
             ids += listing.ids.filter { !ids.contains($0) }
             pages = min(Self.maxPages, max(1, (listing.total + Self.pageSize - 1) / Self.pageSize))
             if listing.ids.isEmpty { break }
@@ -489,14 +718,16 @@ actor WorkshopService {
 
     /// The ids on a profile's Workshop items page, the number of entries in all, and the
     /// account's name. Steam's sign-in page instead means the session is gone.
-    static func decodeProfileListing(_ html: String) throws -> (ids: [String], total: Int, name: String?) {
+    static func decodeProfileListing(
+        _ html: String, requiresSignIn: Bool = false
+    ) throws -> (ids: [String], total: Int, name: String?) {
         var ids: [String] = []
         // An author's items are tiles carrying `data-publishedfileid`; subscriptions are rows,
         // `<div class="workshopItemSubscription " id="Subscription<id>">`, whose details and
         // Unsubscribe control (`UnsubscribeItem( '<id>', '<app>' )`) are not always in the
         // served page, so the row's own id is what names the item.
         let idPattern = try NSRegularExpression(
-            pattern: #"(?:data-publishedfileid="|id="(?:Subscription|UnsubscribeItemBtn)|UnsubscribeItem\(\s*')(\d+)["']"#)
+            pattern: #"(?:\bdata-publishedfileid\s*=\s*["']|\bid\s*=\s*["'](?:Subscription|UnsubscribeItemBtn)|UnsubscribeItem\(\s*["'])(\d+)["']"#)
         for match in idPattern.matches(in: html, range: NSRange(html.startIndex..., in: html)) {
             guard let range = Range(match.range(at: 1), in: html) else { continue }
             let id = String(html[range])
@@ -506,15 +737,27 @@ actor WorkshopService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         // Every page links to the sign-in page in its header; only the page itself is titled so.
         if ids.isEmpty, title == "Sign In" { throw SteamSignInRequired() }
+        // A personal list can also arrive as an anonymous Community page after a session ends.
+        // The same page is valid for an author's public items, so only personal lists require it.
+        if requiresSignIn, firstMatch(#"\bg_steamID\s*=\s*(false)\s*;"#, in: html) != nil {
+            throw SteamSignInRequired()
+        }
         let paging = #"Showing\s+([\d,]+)\s*-\s*[\d,]+\s+of\s+([\d,]+)\s+entries"#
         let number = { (group: Int) in
             firstMatch(paging, in: html, group: group).flatMap { Int($0.replacingOccurrences(of: ",", with: "")) }
         }
-        let total = number(2) ?? ids.count
-        // Steam says this page holds entries yet none could be read: its markup has changed,
-        // which must not pass for an empty list.
-        if ids.isEmpty, total > 0, let first = number(1), first <= total {
-            throw WorkshopFailure(message: String(localized: "Steam returned an unreadable Workshop page. Try again or browse on Steam."))
+        let reportedTotal = number(2)
+        let total = reportedTotal ?? ids.count
+        if ids.isEmpty {
+            let pastLastPage = number(1).map { $0 > total } == true && reportedTotal != nil
+            let emptyMessage = firstMatch(
+                #"<div\b[^>]*class\s*=\s*["'][^"']*\binventory_msg_content\b[^"']*["'][^>]*>\s*(No matching files were found\b)"#,
+                in: html) != nil
+            // A blank, truncated, error or changed page is not proof of zero subscriptions.
+            // Steam must explicitly report zero, a page past the end, or its empty-list message.
+            guard reportedTotal == 0 || pastLastPage || (reportedTotal == nil && emptyMessage) else {
+                throw WorkshopFailure(message: String(localized: "Steam returned an unreadable Workshop page. Try again or browse on Steam."))
+            }
         }
         let name = firstMatch(#"^Steam Community :: (.+?)(?: :: [^:]*)?$"#, in: title).map(unescapeHTML)
         return (ids, max(total, ids.count), name)
@@ -667,8 +910,6 @@ actor WorkshopService {
         return nil
     }
 
-    // Steam's public server-rendered page contains a JSON string, not an executable API response.
-    // Decode the JSON layers without evaluating any page JavaScript.
     static func decodePage(_ html: String) throws -> WorkshopPage {
         try decodeBrowse(html).page
     }
@@ -676,57 +917,78 @@ actor WorkshopService {
     /// A browse page and, for each collection on it, the ids of the wallpapers it holds (not
     /// the collections it holds), in the collection's order.
     static func decodeBrowse(_ html: String) throws -> (page: WorkshopPage, children: [String: [String]]) {
-        // Without the context or its query the page is not laid out as it was; `browse` then
-        // falls back to the links the page still carries.
         guard let context = renderContext(in: html),
-              let queryString = context["queryData"] as? String,
-              let queryData = try? JSONSerialization.jsonObject(with: Data(queryString.utf8)) as? [String: Any],
-              let queries = queryData["queries"] as? [[String: Any]],
-              let query = queries.first(where: { ($0["queryKey"] as? [Any])?.first as? String == "workshop_browse" }),
-              let state = query["state"] as? [String: Any],
-              let result = state["data"] as? [String: Any] else {
-            throw WorkshopLayoutChanged()
+              let queryData = context["queryData"] as? String,
+              let decoded = try? JSONSerialization.jsonObject(with: Data(queryData.utf8)) as? [String: Any],
+              let queries = decoded["queries"] as? [[String: Any]] else { throw WorkshopLayoutChanged() }
+
+        func key(_ query: [String: Any]) -> [String] { (query["queryKey"] as? [Any])?.compactMap { $0 as? String } ?? [] }
+        func data(_ query: [String: Any]) -> [String: Any]? {
+            (query["state"] as? [String: Any])?["data"] as? [String: Any]
         }
-        // The query is there and Steam answered it with something other than success: not a
-        // change of layout, so no list is guessed at from the page's links.
-        guard (result["eresult"] as? Int) == 1 else { throw WorkshopFailure(message: WorkshopLayoutChanged.message) }
+        guard let browse = queries.first(where: { key($0).first == "workshop_browse" }),
+              let result = data(browse) else { throw WorkshopLayoutChanged() }
+        let answer = (result["eresult"] as? NSNumber)?.intValue
+        // 10 is Steam's search being overloaded; any other refusal keeps the page-changed wording.
+        if answer == 10 { throw WorkshopBusy() }
+        guard answer == 1 else { throw WorkshopFailure(message: WorkshopLayoutChanged.message) }
         guard let rows = result["results"] as? [[String: Any]] else { throw WorkshopLayoutChanged() }
-        var creators: [String: String] = [:]
+
+        // Display names of the creators the page mentions, by Steam id.
+        var names: [String: String] = [:]
         for query in queries {
-            guard let key = query["queryKey"] as? [String], key.count == 2, key[0] == "PlayerLinkDetails",
-                  let state = query["state"] as? [String: Any], let data = state["data"] as? [String: Any],
-                  let publicData = data["public_data"] as? [String: Any], let name = publicData["persona_name"] as? String else { continue }
-            creators[key[1]] = name
+            let parts = key(query)
+            guard parts.count == 2, parts[0] == "PlayerLinkDetails",
+                  let name = ((data(query)?["public_data"]) as? [String: Any])?["persona_name"] as? String,
+                  !name.isEmpty else { continue }
+            names[parts[1]] = name
         }
+
+        func number(_ value: Any?) -> Int? {
+            if let number = value as? NSNumber { return number.intValue }
+            if let text = value as? String { return Int(text) }
+            return nil
+        }
+        func fileID(_ value: Any?) -> String? {
+            if let text = value as? String { return UInt64(text) == nil ? nil : text }
+            if let number = value as? NSNumber, number.int64Value > 0 { return number.stringValue }
+            return nil
+        }
+
         var seen = Set<String>()
+        var items: [WorkshopItem] = []
         var children: [String: [String]] = [:]
-        let items = rows.compactMap { row -> WorkshopItem? in
-            guard let id = row["publishedfileid"] as? String, UInt64(id) != nil,
-                  row["consumer_appid"] as? Int == 431960,
-                  let title = row["title"] as? String, seen.insert(id).inserted else { return nil }
+        for row in rows {
+            guard let id = fileID(row["publishedfileid"]), number(row["consumer_appid"]) == WorkshopApp.id,
+                  let title = row["title"] as? String, seen.insert(id).inserted else { continue }
             let preview = (row["preview_url"] as? String).flatMap(URL.init(string:))
+            let creatorID = row["creator"] as? String
             let updated = (row["time_updated"] as? NSNumber)?.doubleValue
-            // Steam's file type 2 is a collection; its children list what it holds.
-            let isCollection = (row["file_type"] as? Int) == 2
+            let isCollection = number(row["file_type"]) == 2
+            var item = WorkshopItem(
+                id: id, title: title,
+                creator: creatorID.flatMap { names[$0] } ?? String(localized: "Workshop creator"),
+                summary: summary(row["short_description"] as? String ?? ""),
+                previewURL: preview?.scheme == "https" ? preview : nil,
+                tags: (row["tags"] as? [Any] ?? []).compactMap { ($0 as? [String: Any])?["tag"] as? String ?? $0 as? String },
+                size: Int64(row["file_size"] as? String ?? "") ?? (row["file_size"] as? NSNumber)?.int64Value ?? 0,
+                subscriptions: number(row["subscriptions"]) ?? 0,
+                creatorID: creatorID,
+                timeUpdated: updated.map(Date.init(timeIntervalSince1970:)))
             if isCollection {
-                children[id] = (row["children"] as? [[String: Any]] ?? [])
-                    .filter { ($0["file_type"] as? Int ?? 0) != 2 }
-                    .sorted { ($0["sortorder"] as? Int ?? 0) < ($1["sortorder"] as? Int ?? 0) }
-                    .compactMap { $0["publishedfileid"] as? String }
+                item.collectionSize = number(row["num_children"]) ?? 0
+                let held = (row["children"] as? [[String: Any]] ?? []).filter { number($0["file_type"]) != 2 }
+                    .compactMap { child -> (id: String, order: Int)? in
+                        fileID(child["publishedfileid"]).map { ($0, number(child["sortorder"]) ?? 0) }
+                    }
+                children[id] = held.sorted { $0.order < $1.order }.map(\.id)
             }
-            return WorkshopItem(
-                id: id, title: title, creator: creators[row["creator"] as? String ?? ""] ?? String(localized: "Workshop creator"),
-                summary: row["short_description"] as? String ?? "", previewURL: preview?.scheme == "https" ? preview : nil,
-                tags: (row["tags"] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String },
-                size: Int64(row["file_size"] as? String ?? "") ?? 0,
-                subscriptions: row["subscriptions"] as? Int ?? 0,
-                creatorID: row["creator"] as? String,
-                timeUpdated: updated.map(Date.init(timeIntervalSince1970:)),
-                collectionSize: isCollection ? row["num_children"] as? Int ?? 0 : nil
-            )
+            items.append(item)
         }
-        let page = WorkshopPage(items: items, page: result["current_page"] as? Int ?? 1,
-                                totalPages: max(1, result["total_pages"] as? Int ?? 1), totalCount: result["total_count"] as? Int ?? 0)
+        let page = WorkshopPage(
+            items: items, page: number(result["current_page"]) ?? 1,
+            totalPages: max(1, number(result["total_pages"]) ?? 1),
+            totalCount: number(result["total_count"]) ?? 0)
         return (page, children)
     }
 }
@@ -738,5 +1000,15 @@ private final class SteamCookieRedirectGuard: NSObject, URLSessionTaskDelegate, 
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
     ) {
         completionHandler(WorkshopService.redirected(request))
+    }
+}
+
+/// Follows no redirect: the renewal token is for Steam's token service and nowhere else.
+private final class SteamNoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

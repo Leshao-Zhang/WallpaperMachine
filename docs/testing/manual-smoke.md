@@ -17,15 +17,24 @@ was run.
 
 - [ ] One library window opens, the starter wallpaper is visible, and there are
       no blank floating panels.
-- [ ] Switch between the Discover, pixiv, Installed and Settings tabs and through the
-      seven Settings categories: Performance, General, Appearance, Displays,
-      Library & Steam, Storage, About.
+- [ ] Switch between the Library, Steam Workshop, pixiv and Settings tabs, between All
+      wallpapers and Favorites with Library's chips and to a collection from the filters
+      panel, and through the eleven Settings sections: Quick
+      Settings (the one Settings opens on), General, Appearance, Desktop & Lock Screen,
+      Playback & Power, Performance, Displays, Keyboard shortcuts, Library & Steam,
+      Storage, About. The window title names the place on show each time, and on All
+      wallpapers, Favorites and a collection the subtitle counts it.
+- [ ] Narrow the window below 960 points: the inspector closes, the tabs stay whole in
+      the middle of the title bar, nothing overlaps the traffic lights or the toolbar, and widening
+      the window opens the inspector again. Open it with the toolbar's **Wallpaper
+      details** button while the window is narrow: it stays open as the window grows and
+      shrinks, and so does a choice to close it in a wide window.
 - [ ] Command-comma reuses the existing window.
 - [ ] Move the panel to another Space (or a desktop with another app full screen) and
       choose Control Panel from the status menu: it appears on the Space you are on,
       and the green button still offers full screen. Minimize the panel, then choose
       Control Panel from the status menu, click the Dock icon, and Command-Tab to the
-      app: each brings it back from the Dock. Repeat the Space check with What's New,
+      app: each brings it back from the Dock. Repeat the Space check with the update window,
       a wallpaper preview and a Steam or pixiv sign-in window.
 - [ ] Close the window with its close button and with Command-W, and reopen it
       each time, without quitting or crashing.
@@ -33,6 +42,9 @@ was run.
       and scroll down a long library, then close the panel and reopen it from the status
       menu: the search, sort, boxes and scroll position are as left. Quit and relaunch:
       Installed starts unfiltered at the top.
+- [ ] In Filters → Tags, click a chip: it fills with the accent and a check and only
+      wallpapers with that tag stay; click it again and they all return. Option-click
+      (or right-click → Hide this tag) strikes it through and hides them.
 - [ ] With the app running, `open -n` the same app: no second copy appears and the
       first shows its panel. Run a copy from another folder: an alert says another
       copy is using the library, and the running copy is untouched. After an in-app
@@ -42,15 +54,57 @@ was run.
       note says to allow it in Login Items, and **Open Login Items…** opens that pane.
       Allow it there and come back to the panel: the switch is on and the note goes
       away without any other action.
+- [ ] In Settings, flip a Quick Settings tile (try Mute All): its full row in
+      Playback & Power follows, and the other way round. Search for a word from a row's
+      explanation: matching rows stay, the section list counts matches per section and dims
+      the rest, a disclosure holding a match opens and closes again when the search
+      clears, Escape clears the field, and a word nothing contains reads "No settings
+      match …".
+- [ ] On a laptop on battery, set **On battery** to Keep running and **When the battery is
+      low** to Reduced quality at a level above the current charge: Quick Settings' On
+      battery and Quality modules read "The battery is low. Reduced quality is in use.",
+      Performance's **Effective now** reads "Limited to 30 fps while the battery is low"
+      while the Frame rate limit slider reads No limit, and a display set above 30 fps notes
+      the same limit in Settings → Displays and the inspector, whose button opens Playback &
+      Power. Set the low-battery rule to Keep running: every one of those lines goes away.
+- [ ] On a laptop on battery, set **On battery** to Keep running and **When the battery is
+      low** to Pause at a level above the current charge: wallpapers pause, Quick Settings'
+      On battery module reads "The battery is low. Wallpapers are paused." and the When the
+      battery is low row adds "In effect now. Wallpapers are paused.". Set On battery to
+      Pause: the module's line goes away; set the rule to Stop: it reads "… Wallpapers are
+      stopped." again. Plug in: the line and the row's In effect now go away.
+- [ ] Set **When the Mac is inactive** to Pause and **Inactive after** to 5 minutes, with
+      display sleep set longer, and leave the Mac alone: after five minutes every wallpaper
+      holds its last frame and the log reads "the Mac counts as inactive". Move the mouse:
+      they play again at once. Wait again and press only a key: they play again within about
+      two seconds. Repeat with Stop (free memory): the wallpapers reload at the first input.
+      Your own Pause from the menu bar stays as you left it throughout.
+- [ ] On a laptop, set **When another app is in front** to Pause on battery and leave a
+      non-maximized window of another app in front of an animated wallpaper. Plugged in, the
+      wallpaper keeps animating in the gaps; unplug: it holds its frame at once; click the
+      desktop: it plays; click the other app: it holds again; plug in: it plays without a
+      click. The menu bar's **On Battery** submenu shows **Pause While Using Other Apps**
+      ticked, and unticking it there turns the row back to Keep running. On battery, zoom a
+      window of another app to fill the screen (not full screen) and minimize it: the
+      wallpaper plays without a click; restore it from the Dock: it holds again.
+- [ ] On a laptop that never answered it, with both battery choices on Keep running, unplug
+      while a wallpaper plays and open the panel: **Save battery when your Mac is unplugged?**
+      appears once (not on the same day as another prompt). Each of its three choices sets only
+      its own row of Playback & Power; **Keep running** changes nothing; it does not return.
 
 ## Appearance
 
 - [ ] Choose Light and Dark, then System, and change the macOS appearance.
-- [ ] Check the titlebar, menus, controls, dialogs, inspector and download
-      popover in each mode.
+- [ ] Check the title bar (the name and version, the tabs, one colour from the traffic
+      lights to over the inspector), the inspector's edge resizing it, the Now Playing bar
+      and its details, menus,
+      controls, dialogs, inspector, filters panel and download popover in each mode.
 - [ ] Set an accent and a surface tone; relaunch and confirm both persist.
 - [ ] Try white and black accents, then Reset appearance. Wallpapers and
       playback must not change.
+- [ ] Choose **Always** under Halloween look: the window, the pumpkin beside the
+      traffic lights and the Dock icon change at once, in light and dark; **Off** brings
+      back your own accent, tone and Dock icon.
 
 ## Library and import
 
@@ -67,13 +121,13 @@ was run.
 - [ ] With animated GIF previews in the library, Installed shows every tile as a
       still, with nothing moving at rest. Resting the pointer on a tile plays only
       that tile, Tab or arrow keys play only the focused one, and leaving it, a
-      selection drag, another tab or another window stops it with no flicker when
+      selection drag, another page or another window stops it with no flicker when
       the grid re-renders. When a Workshop download finishes or the library is
       rescanned, the covers stay as they are with no flicker; after a preview
       file is replaced (import it again with Replace if changed), only that
       tile's cover refreshes.
 - [ ] With a saved Steam sign-in, select an installed Workshop wallpaper and
-      choose **Reinstall from Workshop…** (the circular arrows beside Trash):
+      choose **Reinstall from Workshop…** in the inspector's **More actions** menu:
       a sheet asks first and Cancel changes nothing. Confirming shows the
       download in the queue and, when it completes, the wallpaper keeps its
       options and a display showing it loads the new files. Delete the entry file
@@ -99,10 +153,11 @@ was run.
 ## Layout and accessibility
 
 - [ ] Check Discover, pixiv and Installed at 1240×800, 960×640 and 760×560 in light and
-      dark mode. The inspector stays present; panes resize without losing the
-      target or the primary actions.
-- [ ] Command-F, grid arrows, Return/Space, text editing and VoiceOver names
-      stay correctly scoped.
+      dark mode, with the inspector open and closed. Panes resize without losing the
+      target menu or the primary actions, and nothing is cut off at the window's edge.
+- [ ] Command-F puts the keyboard in the page's search field (Settings' too); grid arrows, Home and End, Return and Space, Delete, Escape (a name field,
+      then a popover, then selection mode), text editing and VoiceOver names stay
+      correctly scoped. With Reduce Motion on, no equalizer, spinner or preview animates.
 
 ## Discover, search and filters
 
@@ -111,27 +166,29 @@ was run.
 - [ ] Navigate away and back: query, page and selection stay.
 - [ ] A failed request's Retry repeats that request.
 - [ ] Open and dismiss the Downloads/Import pane.
-- [ ] Select tags in the filter sidebar across the resolution,
-      ultrawide/portrait, genre, age-rating and category groups: results contain
-      only items matching every selected tag, and Clear filters restores the
-      unfiltered query.
+- [ ] Open the Filters sidebar from the page's Filter button and select tags across
+      the resolution, ultrawide/portrait, genre, age-rating and category groups:
+      results contain only items matching every selected tag, the sidebar slides out
+      from the window's leading edge while the grid narrows, and Clear filters restores
+      the unfiltered query. The Filter button and the sidebar's own button close it
+      with the same slide; it stays open on the next library page.
 - [ ] Filter changes never activate wallpapers.
 
 ## pixiv
 
-- [ ] The pixiv tab opens on the daily ranking; paging, a tag search and each
+- [ ] The pixiv page opens on the daily ranking; paging, a tag search and each
       filter group work, and Clear restores the defaults.
 - [ ] Select a work with several pages, step to another page and download it:
       it appears in Installed as a still wallpaper, applies, and Image fit and
       Background color change it.
 - [ ] **Sign in to pixiv…** opens pixiv's own sign-in page in its own window;
-      signing in with a pixiv ID or email closes it and the sidebar names the
+      signing in with a pixiv ID or email closes it and the Filters sidebar names the
       account. Closing the window instead changes nothing.
 - [ ] Quit and reopen: the sign-in is still there, with no keychain prompt on a
       release build.
 - [ ] With an account whose viewing restrictions allow R-18 works, tick Mature
       (R-18): search includes works with the R-18 badge and the R-18 rankings
-      join the menu. With an account that hides them, the sidebar says so.
+      join the menu. With an account that hides them, the Filters sidebar says so.
 - [ ] **Log out**: the Mature box unticks and disables, an R-18 ranking returns
       to its all-ages one, and Keychain Access no longer lists
       `app.wallpapermachine.pixiv`.
@@ -160,7 +217,8 @@ was run.
       no dialog opens, the tile's ring fills with a percentage that matches the
       inspector's received/total bytes, and clicking the ring cancels.
 - [ ] With a saved sign-in, queue at least four Workshop items: three transfer
-      at once (the activity bar reads "3 downloading" with a combined speed),
+      at once (the toolbar's downloads button rings itself and its tooltip reads "3
+      downloading" with a combined speed),
       the fourth waits for a free slot, and the app log records each start.
 - [ ] With no saved sign-in, queue several items: only the first prompts, the
       rest wait for the sign-in, then start silently as soon as Steam accepts
@@ -221,7 +279,10 @@ reuse, or visual behavior, which is why these items are manual.
       apply runs, or use a wallpaper whose files fail to load on one display: the
       others return to what they showed.
 - [ ] Pause/resume and relaunch: the expected wallpaper and playback state
-      return.
+      return. Now Playing shows the target display's wallpaper with its equalizer
+      only while playing; its Previous, play/pause, Next and Recently used buttons
+      act as labelled, and with the target display empty it says "Nothing on this
+      display" while still reporting the global playback state.
 - [ ] Leave invalid scaling text, refresh or change routes, then return: the
       text is preserved and Apply changes is disabled. Return stages only that
       field, not unrelated properties.
@@ -259,10 +320,9 @@ reuse, or visual behavior, which is why these items are manual.
       line. **Apply changes** still reloads the desktop wallpaper from the saved options.
       Drag the slider and hold: the preview follows the thumb as it moves, not only after it
       stops, and stays where the thumb is while it is held; let go and nothing jumps, and a drag
-      back to where it began puts the preview back. Open the colour picker and move around in it:
-      note whether the preview follows the colour while the picker is open or only when it
-      closes (WebKit's picker may send its input events either way), and that choosing a colour
-      and closing it saves that colour. Press **Revert** or **Restore default** while the picker
+      back to where it began puts the preview back. Open the colour panel and move around in it:
+      the preview follows the colour while the panel is open, the colour is saved once you
+      stop moving for a moment, and closing the panel saves the colour on show. Press **Revert** or **Restore default** while the picker
       is open: the preview goes back and nothing stays on show.
 - [ ] Property edits on the desktop ([edits on the desktop](../features/wallpaper-properties.md#showing-edits-on-the-desktop)):
       with **Show property edits on the desktop as I make them** off, change a slider on a
@@ -290,8 +350,7 @@ reuse, or visual behavior, which is why these items are manual.
       show a scene or video whose shape differs from the display with **Fill**, then drag
       **Horizontal position** and **Vertical position** across 0 to 100%. The visible part
       follows the thumb while it is dragged, smoothly enough to steer by, and slides on the
-      display without the wallpaper restarting, once on each scene renderer
-      (Compatibility and Native Metal preferred) and with Compatibility video playback.
+      display without the wallpaper restarting, once with a scene and once with a video.
       Releasing keeps it where it stopped, a drag back to where it began returns to that
       position, and the lock screen and the Mission Control picture do not change until the
       release. With **Fit** and a **Scale factor** below 1 the picture slides inside the
@@ -304,9 +363,11 @@ reuse, or visual behavior, which is why these items are manual.
 - [ ] Position is remembered: relaunch and it returns; the same wallpaper on another display and
       another wallpaper on the same display keep their own; the lock screen and screen saver
       (when enabled) draw it; the Mission Control picture is retaken after a move.
-- [ ] With **Video playback** on Native video preferred and a supported clip, the Position
-      block shows the native-player note and **Open Performance** and the video stays
-      centred; choosing Compatibility lets the sliders move it.
+- [ ] With a supported clip larger than the display (an MP4 and a WebM), the Position sliders
+      move the video: it stays where it was while a slider is dragged and moves when the drag
+      settles; the Mission Control picture matches; **Center** puts it back; a mirror of it
+      stays centred. The Position block has no note about the player, and the **Frame rate**
+      row is absent on the display a plain video plays on.
 
 ## Wallpaper switching
 
@@ -344,9 +405,9 @@ describes what should happen and the log lines to read afterwards.
 - [ ] Switch a web page to another web page (a project with a different entry page): the
       previous picture stays until the new page has loaded and painted, then fades out, and
       the new page is never seen empty or black behind it. The log has `frame captured`,
-      `adopted by host` and `released ... (host ready)`, half a second after the page finished
-      loading. Look for a flash of an empty page as the picture goes, which would mean 500 ms
-      after `didFinish` is not enough for that project's first paint, and for the system
+      `adopted by host` and `released ... (host ready)`, once the page has committed its first
+      frame. Look for a flash of an empty page as the picture goes, which would mean that
+      project's first frame shows too little of it, and for the system
       picture between the old page closing and the new one opening, which the host cannot
       cover.
 - [ ] Switch a web page to a scene: the page's snapshot answers the request for a still (the
@@ -360,8 +421,7 @@ describes what should happen and the log lines to read afterwards.
       at once (`released ... (host ready)` without the half-second wait) and the failed page
       and its Retry are what the display shows. Remove a display's web wallpaper while its
       page is still loading: the log says `released ... (window closed)`.
-- [ ] Native video backend (**Video playback** set to **Native video preferred**, a plain
-      video that **In use now** lists as `native`): switch from one clip to another. The first
+- [ ] Plain video (a clip that **In use now** lists): switch from one clip to another. The first
       clip keeps playing until the second one's window is up, which opens with the held
       picture over it and fades it out on the clip's first frame, with no black or system
       picture in between. The log has `frame captured`, `adopted by host` and `released ...
@@ -370,10 +430,12 @@ describes what should happen and the log lines to read afterwards.
 - [ ] Switch from a scene to a native clip, and from a clip to a scene: the system picture may
       show for as long as the clip's metadata read takes after a scene (the engine closes the
       scene's window first); a clip to a scene behaves like any scene switch.
-- [ ] Apply a video the native backend refuses (no video track, or a frame rate above the
-      target rate): the held picture stays until the scene engine's fallback has drawn, the
-      log has `veil on scene layer` and `released ... (scene first frame)`, and no clip
-      window appears.
+- [ ] Apply a VP9 WebM or an H.264 Matroska video (macOS cannot open them; the app's own WebM
+      player plays them): the clip's window appears like any other native clip's, the held picture
+      goes when its first frame is ready, it loops without a visible or audible seam, pause and
+      volume follow the controls, and a WebM with Opus or Vorbis sound is heard. A VP8 WebM
+      is refused with a message naming the format, and the display keeps the picture it had (no
+      clip window); nothing else draws it.
 - [ ] Apply a clip stored on a slow or sleeping external drive: the old clip keeps playing
       through the read. If the read outlasts 8 seconds the clip's window opens without a
       picture over it and the log says `no window took it`.
@@ -382,6 +444,38 @@ describes what should happen and the log lines to read afterwards.
 
 ## Native desktop posters and Mission Control
 
+- [ ] Stage Manager frame continuity: import the asset-free
+      [test wallpaper](../../Tests/UI/Fixtures/WebFrameContinuity/project.json)
+      (the folder contains WebGL, Canvas 2D and CSS moving strips), enable Stage
+      Manager and leave the Library panel and inspector open.
+      Record the playback rules and power source first. Use Keep running for
+      the foreground-app and covered-desktop rules during the continuity check,
+      then restore them: an intentional Pause on battery hold is not this stutter.
+      Click the exposed desktop, then the panel, at least ten times. Watch the wallpaper
+      throughout each transition: it must keep advancing, without holding a frame
+      and jumping forward afterwards. Repeat with the library filtered to one tile,
+      and with the panel closed while switching between another app and the desktop.
+      Also switch among three apps through Stage Manager: start in one app, select
+      a second app, select the wallpaper app's panel, then return to the first app.
+      Repeat this sequence at least ten times; desktop/panel clicks alone do not
+      cover app-to-app transitions.
+      Keep the same wallpaper selected during each trial: changing it creates a
+      new window and invalidates any temporary window configuration under test.
+      One smooth attempt is insufficient: this regression can be intermittent.
+      Confirm that the unchanged baseline still fails the same sequence before
+      attributing a smooth trial to a candidate fix. If both are smooth, the
+      comparison is inconclusive.
+      Record the display, refresh rate, power source and Stage Manager state for
+      each trial. Repeat the baseline after a display change or sleep/wake; a
+      smooth trial on an external display does not validate the built-in display.
+      For the final build, relaunch and reapply the wallpaper before repeating
+      both sequences, so the result covers newly created windows rather than a
+      temporary debugger setting. Also repeat after changing display geometry;
+      AppKit's live-resize completion can reset the transition composition policy.
+      Repeat with the reported wallpaper and restore the previous settings after the run.
+      Show Desktop shortcuts are not a substitute for these clicks. If recording
+      `requestAnimationFrame` timestamps, compare them with the visible result:
+      healthy callback timing does not prove that WindowServer presents the frames.
 - [ ] Create multiple Desktops, apply a video, and immediately open Mission
       Control **without** switching Desktops.
 - [ ] Apply a different scene and repeat, including rapid A→B→C changes. All
@@ -399,9 +493,11 @@ describes what should happen and the log lines to read afterwards.
       moved on; with it off they keep the last settled frame.
 - [ ] With an animated wallpaper that has played for over a minute, swipe
       quickly between several Desktops and open Mission Control: every
-      thumbnail shows the wallpaper as it looked within the last two minutes, and
-      a Desktop created in the middle of the swipes has a picture at once. After
-      two more minutes, swipe once more and check the thumbnails moved on.
+      thumbnail shows the wallpaper as it looked once it settled, and a Desktop
+      created in the middle of the swipes has a picture at once. With verbose
+      logging on, keep swiping, waking the Mac and pausing and resuming playback
+      for a few minutes: the log says `kept the settled poster` and no new
+      `poster-*.jpg` appears in `DesktopPosters`.
 - [ ] Turn off **Use the wallpaper as the macOS desktop picture** with a wallpaper
       playing: within a few seconds every Desktop shows the user's own picture in
       Mission Control and the Spaces bar, the five-minute row is disabled, and
@@ -425,6 +521,10 @@ describes what should happen and the log lines to read afterwards.
       wallpaper and Mission Control thumbnails remain unchanged.
 - [ ] Change a native wallpaper outside the app and verify that quitting does
       not overwrite it.
+- [ ] Set the desktop picture to an image you can delete, apply a live wallpaper,
+      delete the image, then quit. The quit finishes, every Desktop shows another
+      display's original or macOS's default picture, and the log names the missing
+      file and what was put back instead.
 - [ ] With a live wallpaper applied, log out, then restart and shut down (separate
       runs, authorized only). macOS must show no "cancelled" or "preventing logout"
       dialog. The log says `quit: reason=logout mode=powerOff` (or restart or
@@ -478,17 +578,16 @@ earlier wallpaper (select it again in System Settings once).
 macOS refuses screenshots while locked, so the final lock-screen appearance and
 smoothness cannot be captured and have to be judged by eye.
 
-## Native video backend (experimental, opt-in)
+## Native video backend
 
-Set **Video playback** to **Native video preferred** and apply a plain video that
-**In use now** lists as `native`. The rows below are what no headless test can show about
-the native player on a real desktop; the tests cover the rules and the media tests the
-player on synthetic clips ([coverage](coverage.md#nativevideo) lists what is not covered).
+Every plain video is played by the app's own players now, so apply a plain video (an MP4 for
+AVFoundation, a VP9 WebM for the WebM player). The rows below are what no headless test can show about
+the players on a real desktop; the tests cover the rules and the media tests the
+players on synthetic clips ([coverage](coverage.md#nativevideo) lists what is not covered).
 Turn on **Detailed logging** ([diagnostics](../features/diagnostics.md#levels-and-detailed-logging))
 and read the log after each row. With every result, write down the macOS version and build,
-the display and its refresh rate, and whether Compatibility behaves the same on the same
-clip: a difference between the backends is the case to report, and the same behavior on
-both is the system's.
+the display and its refresh rate, and the container and codec of the clip: a difference between the
+AVFoundation player and the WebM player on the same content is the case to report.
 
 ### Sleep, wake, lock and unlock
 
@@ -511,15 +610,18 @@ counters (`nativeVideoPlaybackStalled`, `nativeVideoPlaybackKick`,
 - [ ] With two displays, sleep and wake: both pictures move, and each display's check is
       logged under its own wallpaper.
 - [ ] Whenever a stall is logged, note whether the kick was enough, whether a rebuild was
-      needed and whether the clip ended on Compatibility (the reason is in **In use now**).
+      needed and whether the display ended up failed (the reason is in the wallpaper's state).
       A stall that ends there is the case to report.
 
 ### The menu bar and switching
 
 Two effects are open questions for window-based video wallpapers on recent macOS builds:
 the translucent menu bar keeping the tint of the first frame instead of following the
-picture, and a new picture showing only after another app is clicked. Neither has been
-seen in this app, and nothing in the code or the tests can show either. The native window
+picture, and a new picture showing only after another app is clicked. Issue
+[#169](https://github.com/MMFoundation/WallpaperMachine/issues/169) reports the menu bar
+keeping the old wallpaper after a playlist rotates until the desktop is revealed.
+Native tests cover an empty poster read while a clip prepares, retried on readiness even
+while covered; they do not establish how macOS samples the menu bar. The native window
 is opaque (`isOpaque = true` in `NativeVideoWallpaperWindow`) and nothing re-commits it
 after a switch.
 
@@ -529,12 +631,14 @@ after a switch.
 - [ ] Switch wallpaper from the menu bar item (**Next Wallpaper**, **Previous Wallpaper**
       or an entry under **Recently used**) without touching any other app: the new
       picture appears at once, not only after another app or window is clicked. Repeat
-      from the panel's Apply, and for native to native, native to Compatibility and
-      Compatibility to native.
+      from the panel's Apply, and for clip to clip, clip to scene and scene to clip.
+- [ ] Leave another app covering the desktop while a playlist rotates between visibly
+      different clips, including one that takes time to load. The menu bar and Dock
+      pick up the new wallpaper without revealing the desktop or clicking another app.
 - [ ] Press **Next Wallpaper** several times in a row over native clips: only the last
       one appears on the desktop, with no flash of the ones in between. The log says
       `superseded while its metadata was read` for any that were overtaken.
-- [ ] Repeat the first two rows with the same clip on Compatibility.
+- [ ] Repeat the first two rows with the same clip as a WebM (the WebM player) and as an MP4 (AVFoundation).
 
 A failure here does not justify making the window non-opaque (an alpha just below 1) or
 forcing a re-commit of the window or layer after a switch. Each of those changes costs
@@ -549,6 +653,11 @@ until such a measurement says otherwise.
 Needs two displays that each show their own wallpaper. The layout and the commands are
 unit-tested; how the menu draws and reads on real screens is not.
 
+- [ ] In the menu bar panel, show a wallpaper with a square preview, then mouse-click each
+      display segment above the large cover in both directions: the selected segment, title
+      and cover follow the chosen display. Repeat with a portrait preview and a 16:9 preview.
+      Use actual pointer clicks; an accessibility press alone does not exercise the cover
+      hit-testing regression ([#171](https://github.com/MMFoundation/WallpaperMachine/issues/171)).
 - [ ] Open the menu bar item: there is one submenu per display instead of the flat
       Previous / Next / Recently used, the main display first and the others left to
       right as the screens sit on the desk. Long display names stay readable, and
@@ -573,17 +682,25 @@ unit-tested; how the menu draws and reads on real screens is not.
 ### Scaling and posters
 
 - [ ] With a landscape clip, set each **Scaling mode** (Fill, Fit, Stretch, Original size),
-      then a **Scale factor** above and below 1, once on Native and once on Compatibility
-      on the same display: the picture covers the same area with the same crop and the
+      then a **Scale factor** above and below 1, once with an MP4 and once with a WebM of the
+      same picture on the same display: the picture covers the same area with the same crop and the
       same black bars. Original size shows one video pixel per point, so a 1920x1080 clip covers
       1920x1080 points of a Retina display. An anamorphic clip is the one documented
-      difference ([performance](../features/performance.md#video-backend)).
+      difference ([performance](../features/performance.md#video-playback)).
 - [ ] Change the mode and the factor while the clip plays: the picture moves without the
       clip restarting or going black, and the log (detailed) has a `scaling … -> …` line
       for the change.
 - [ ] Set a large **Scale factor** (the panel sets no upper limit; try 4, then 8) on the
       largest display: playback stays smooth. Record the factor, the display and any
       dropped frames; the cost of a large factor is unmeasured.
+- [ ] Set **Fit with blurred backdrop** for a 16:9 scene and a 16:9 clip on a display of
+      another shape (an ultrawide, a MacBook panel), on Native Metal and on Compatibility:
+      the picture sits where Fit puts it and the bars hold a soft, darker copy of it that
+      moves with it, with no seam, block or shimmer at the picture's edges; a position
+      slider moves the picture and not the copy; the lock screen, the screen saver and the
+      Mission Control picture show the same. A clip the native player draws keeps black
+      bars and the inspector says so. **Match with blurred backdrop** reads in full in the
+      Settings › Displays menu in every language. Not seen on a display yet.
 - [ ] Play a portrait clip recorded on a phone (stored rotated), and a mirrored one if
       there is one. It is upright on the desktop, and its Mission Control thumbnail and
       the picture on another Space are upright too and match the desktop, also with Fit
@@ -614,8 +731,8 @@ closed lid has not been seen on a desktop
 ### Slow storage and cost
 
 - [ ] If a wallpaper's video file can be put on a spun-down external disk, a network share
-      or an evicted cloud file, apply it on Native. Either it plays once the volume
-      answers, or it lands on Compatibility and **In use now** names the storage and the
+      or an evicted cloud file, apply it. Either it plays once the volume
+      answers, or the display is reported as failed and its state names the storage and the
       step (the metadata read or the first frame). The other displays' videos are held up
       no longer than the metadata limit (8, 30 or 60 seconds by storage). Record the
       storage, the time taken, and the `nativeVideoProbeTimeout` and
@@ -625,6 +742,27 @@ closed lid has not been seen on a desktop
       check after the wake. If there is one, measure it with the power harness before
       changing anything; the cost of the check's video output on a 4K clip is unmeasured.
 
+### HEVC tagged hev1
+
+- [ ] Apply an MP4 whose HEVC is tagged `hev1` with its parameter sets in `hvcC` (FFmpeg's
+      `-tag:v hev1` writes one): it plays on the desktop, in the preview and on the lock screen,
+      and the log says it plays from a clone retagged `hvc1`; the file in the library keeps its
+      size, date and bytes. If the Windows VM is available, compare a frame with Wallpaper
+      Engine's (`scripts/we_reference.py`).
+- [ ] With the library on an external drive, apply it again: the inspector reads **Loading
+      wallpaper content…** with the message that the corrected copy is being made, the clip opens
+      when the log says a full copy was made (a clip over 2 GB fails saying it is too large for
+      one), and other displays open meanwhile without waiting for it. Import the same clip from
+      that drive: its library tile gets a picture, and the inspector's black-bar check reads it.
+- [ ] Rotate a playlist of `hev1` clips from that drive past 2 GB in total: each one plays, the
+      copies of clips no longer shown making room for it. Eject the drive while one plays, press
+      **Clear unused caches…**, reconnect: the clip plays again (from a copy made again, never
+      stalling on its file).
+- [ ] Eject that drive while a full copy is being made: the log says the copy was not made, the
+      inspector shows the wallpaper failed with the read error, and the log shows no new copy
+      until a wallpaper is applied again. Delete an `hev1` wallpaper, put it back from the
+      Trash and apply it: it plays from a copy made again.
+
 ## Audio responsiveness
 
 - [ ] Use an authored audio-reactive scene, leave Audio response enabled, and
@@ -632,15 +770,23 @@ closed lid has not been seen on a desktop
 - [ ] Play and pause music in another app and check shader, script and particle
       response.
 - [ ] Verify that mute affects wallpaper playback only.
-- [ ] With a scene, a video (Native and Compatibility) and a Web wallpaper that all make
+- [ ] With a scene, a video (an MP4 and a WebM with sound) and a Web wallpaper that all make
       sound, press **Mute Wallpapers** in the menu bar: every one goes silent at once while
-      the pictures keep playing, the item is ticked, and Settings → Performance → Playback
-      shows **Mute all wallpapers** on. Choose it again, or use `wallpapermachine://unmute`:
+      the pictures keep playing, the item is ticked, and Settings → Playback & Power
+      shows **Mute all wallpapers** on (and the Quick Settings Mute All tile is lit). Choose it again, or use `wallpapermachine://unmute`:
       each wallpaper is audible again at the volume it had, and the wallpapers' own **Mute
       audio** switches in Settings → Displays never changed. Apply another wallpaper while
       muted: it starts silent. Add an app rule that mutes, turn **Mute all wallpapers** off
       while that app runs: the wallpapers stay silent until the rule ends. Quit and reopen
       while muted: the wallpapers start silent and the item is still ticked.
+- [ ] With the same three wallpapers, set **When another app plays sound** to **Reduce
+      volume**: **Reduce volume to** appears at 30%. Play music in another app: after about
+      half a second every wallpaper is quieter and keeps playing; drag the slider while the
+      music plays and the level follows on release; at 0% they are silent. Stop the music: about
+      two seconds later each wallpaper is back at its own volume, and its **Volume** slider never
+      moved. A Web wallpaper that makes its sound with Web Audio keeps its level, as it does
+      for its own Volume. Turn **Mute all wallpapers** on while turned down, then off: silent,
+      then turned down again, not at full volume.
 - [ ] Verify that the final disabled or removed scene stops capture.
 - [ ] Verify that denied permission surfaces an error.
 
@@ -652,13 +798,22 @@ closed lid has not been seen on a desktop
       replacement of the app in Applications. Update tests use fixture JSON, a
       fake client and locally made images, so this path is manual only.
 - [ ] With an update available (a build older than the latest release) and
-      another app full-screen, no update alert appears and the log has
-      `update prompt deferred`; leaving full screen shows the alert once, and
-      opening the control panel while a display is covered shows it too.
+      another app full-screen, no update window appears and the log has
+      `update prompt deferred`; leaving full screen shows the window once, and
+      opening the control panel while a display is covered shows it too. The window
+      lists the versions since the running one that the manifest carries (its 20
+      newest changelog sections), newest first, in the app's language, with linked
+      issue and commit references; **Install Update** downloads with a progress bar,
+      then quits and reopens; **Skip This Version** keeps the next launch quiet.
 - [ ] Opening the disk image shows one window without toolbar or sidebar: the
       app and Applications at their places over the background, labels readable,
-      the volume icon. Dragging installs; the first launch is refused and opens
-      from System Settings → Privacy & Security → **Open Anyway**.
+      the volume icon. Dragging installs; a release (Developer ID signed and
+      notarized) opens on its first launch without **Open Anyway**, also with the
+      network off, and `spctl --assess -vv` on the installed app says
+      `source=Notarized Developer ID`. After updating from a project-certificate
+      copy (1.8.0 to 1.8.2), macOS asks for system audio and Apple Events again,
+      and the keychain asks once before handing over the saved pixiv and Steam
+      sign-ins.
 
 ## Cross-cutting
 

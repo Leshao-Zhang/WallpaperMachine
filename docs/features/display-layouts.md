@@ -125,7 +125,11 @@ them, and promises only this:
   macOS names it. The app does not choose another member or draw on the others.
 - A closed lid follows the same rule: the `primary` selector means whichever display
   macOS then reports as the main one, and a wallpaper assigned to the built-in display
-  waits there until that display is listed again.
+  waits there until that display is listed again. The new main display shows its own
+  saved wallpaper (nothing while that is switched off or set to mirror), or the
+  built-in display's if it was never configured
+  ([main display changes](control-panel.md#target-display)). The scenes keep running
+  through the change; only their windows move.
 - A screen AppKit lists without a display number is not drawn on by the Swift hosts,
   because there is no ID to match it to a wallpaper. It is not mistaken for a display
   that left: its coming and going refreshes the displays like any other change.
@@ -140,16 +144,21 @@ them, and promises only this:
 
 None of this has been checked against real mirror sets, AirPlay or a closed lid; the
 tests prove what the host and the refresh do with the readings they are given. The
+main-display handover is covered device-free in the Rust crates: the bridge's
+`display::main_display_handover_tests` for the configuration, and the core's
+`display::state::main_display_tests` and `engine::actor::main_display_tests` for the
+records and for a reconciled scene that keeps its handle with no load or close. The
 [hot-plug and mirroring rows](../testing/manual-smoke.md#hot-plugs-mirroring-and-the-lid)
 of the manual smoke checklist are how it gets checked.
 
 ## Spaces boundary
 
-These are per-display layouts. [Follow desktop Space](spaces.md) separately keeps
-wallpaper/playlist choices by Space UUID and reloads the active display on a desktop
-change. Applying a layout is a manual override for the current visit. A layout does
-not save that Space map or switch Spaces, and inactive desktops do not retain
-separate live renderer instances. Actual OS transitions still need desktop verification.
+These are per-display layouts. [Different wallpaper for each desktop](spaces.md)
+separately keeps wallpaper/playlist choices by Space UUID and reloads the active
+display on a desktop change. Applying a layout sets the wallpaper of the desktop each
+display is on, as any manual choice does in that mode. A layout does not save that
+Space map or switch Spaces, and inactive desktops do not retain separate live
+renderer instances.
 
 ## Code and verification
 
@@ -158,9 +167,9 @@ separate live renderer instances. Actual OS transitions still need desktop verif
 | Records, bounded persistence and backup validation | `App/Services/Library/WallpaperDisplayLayoutStore.swift` |
 | Capture, planning, preflight and verified recovery | `App/Services/Desktop/WallpaperDisplayTransfer.swift` |
 | Bridge queue, clean-option checks and final history | `App/ViewModels/BridgeStoreDisplayLayouts.swift` |
-| Panel actions/snapshot | `App/Views/ControlPanel/WebPanelDisplayLayouts.swift` |
-| Settings UI | `WebUI/display-layouts.js`, integrated in `WebUI/settings.js` |
-| Apply to all displays button | `WebUI/panel.js` (inspector), `activateAll` in `WebPanelActions.swift` |
+| Panel actions and state | `saveDisplayLayout`, `renameDisplayLayout`, `deleteDisplayLayout`, `applyDisplayLayout`, `copyWallpaper`, `swapWallpapers` in `App/Views/ControlPanel/Model/PanelController+DisplayLayouts.swift` |
+| Settings UI | The Display layouts group in `App/Views/ControlPanel/Settings/Sections/DisplaysGroups.swift`, Copy or swap in `DisplaysSettingsCard.swift`, the page state in `Settings/DisplaysSettingsModel.swift` |
+| Apply to all displays | The inspector's **More actions** menu (`Inspector/InspectorHeader.swift`), `activateAll` in `Model/PanelController+Library.swift` |
 | Shortcuts and links | `App/Services/Automation/WallpaperConfigurationIntents.swift`, `WallpaperIntents.swift` (Apply Wallpaper's **On all displays**), `AutomationCommand.swift`, `AppDelegate.performAutomation` |
 
 The store, transfer and BridgeStore integration suites (`WallpaperDisplayLayoutStoreTests`,
@@ -170,10 +179,12 @@ mutation, recovery of empty destinations, external-choice preservation, cancella
 manual-choice callbacks, clean-edit preflight, paused playback, a newer queued manual
 action and applying one wallpaper to every display (plan order, displays that already show
 it, a display set that changed while preparing, one history entry per display, rollback).
-`ControlPanelDisplayLayoutTests` drives an offscreen WKWebView through save, rename,
-apply, delete, copy, swap, Apply to all displays (offered only with two eligible displays),
-failed-recovery feedback, focus return, escaped names, unavailable
-displays and the compact English/Chinese/Japanese layout; `WallpaperBackupTests`,
+`PanelDisplayLayoutActionsTests` covers the panel's save, rename, apply, delete, copy,
+swap, a failed swap putting both displays back, unavailable displays and the limit;
+`DisplaysSettingsModelTests` the page's status lines, failed-recovery feedback and focus
+return; `SettingsBRenderTests` the page in every shipped language at the smallest window;
+`InspectorPolicyTests` and `PanelLibraryActionsTests` Apply to all displays (offered only
+with two eligible displays, rollback after a failure); `WallpaperBackupTests`,
 `AutomationCommandTests` and `AppAutomationTests` cover backup merging and link validation.
 These tests create no desktop wallpaper windows and do not prove real multi-monitor
 compositor transitions, visible appearance, VoiceOver, Siri or Shortcuts registration.

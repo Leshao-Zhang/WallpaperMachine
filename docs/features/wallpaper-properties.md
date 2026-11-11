@@ -44,9 +44,11 @@ superseded load cannot replace the newer preview. Load failures stay in the wind
 with their reason and a reload action; first-frame or page readiness has a
 30-second budget while visible.
 
-Scene and video previews use a private Compatibility renderer attached to the
-window, independently of the desktop's renderer preference, and scene hover,
-buttons and dragging are scoped to that view. Web previews reuse the wallpaper
+A scene preview uses a private Native Metal renderer attached to the window, and scene
+hover, buttons and dragging are scoped to that view. A video preview plays with the app's own
+players in the same view (AVFoundation for the containers macOS opens, the WebM player for WebM
+and Matroska), never the scene engine; it follows the wallpaper's scaling mode but not its scale
+factor or position, and a clip neither player can play is a failed preview with the reason. Web previews reuse the wallpaper
 host protocol in a separate, nonpersistent website data store and support ordinary
 in-window interaction; preview storage is discarded on close and is not the
 desktop page's localStorage or signed-in session. File and directory properties
@@ -86,17 +88,17 @@ change too, so it resumes current. A failure to show an update is logged (once p
 distinct problem) and the preview keeps playing what it has; the next edit tries again.
 
 A slider or a colour is also followed while it is being dragged, not only when it is
-let go. The panel sends the value under the thumb (`propertyPreview`) at most every
-100 ms and one at a time, as a Position slider does, and the window reads the draft with
+let go. The panel sends the value under the thumb (`previewProperty`, through
+`DragStepPump`) at most every 100 ms and one at a time, as a Position slider does, and the window reads the draft with
 that value on top (the `pending` list of the bridge's `wallpaper_preview`) as soon as it
 has taken the step before, without the 150 ms wait an edit gets, which a drag would
 never get to the end of. A step is not an edit: nothing becomes **Modified**, dirty or
 saved, and letting go of the control makes the edit that keeps the value. A step that
-fails is ignored, and a key press, which changes the value at once, shows no step before
-it is saved. A colour picker is used in a panel of its own, so the page sees no pointer
-on it: its first step waits one task, and a single pick, whose change event follows at
-once, shows nothing before it is saved. Whether the colour picker of WebKit sends steps
-while it is open is checked on a desktop
+fails is ignored, and a key press or a VoiceOver adjustment, which changes the value at
+once, shows no step before it is saved. The colour well opens the system colour panel,
+whose dragging the inspector cannot see: each colour it reports is a step, its first one
+waiting a turn, and the colour is saved once it has stayed the same for 350 ms or the
+panel closes. How smoothly the desktop follows is checked on a desktop
 ([manual smoke](../testing/manual-smoke.md)).
 
 A scene takes the whole property state through the renderer's
@@ -121,15 +123,18 @@ shows those. Apply changes is unchanged: it reloads the wallpaper from the saved
 
 ## Properties
 
-The inspector's compact **General configuration** section holds mute, volume,
+The inspector's compact **General configuration** section holds **Mute this
+wallpaper** (shown on and locked while [Mute all wallpapers](performance.md#playback)
+is on), volume,
 [Audio response](audio-response.md), and media integration. **Audio and media
-status** expands to show their explanations and delivery status. **Displays**
-follows with per-display playback configuration, open when the wallpaper is on a
-display and collapsed otherwise, then **Collections**.
-**Wallpaper properties** comes last, with the wallpaper's authored controls in their
-original order, so a long property list never pushes the shorter sections out of
-reach. General, display and property disclosures retain their state across
-snapshot updates.
+status** expands to show their explanations and delivery status. The presets and
+**Wallpaper properties** follow, with the wallpaper's authored controls in their
+original order. **Displays** comes next with per-display playback configuration,
+open when the wallpaper is on a display and collapsed otherwise, then **Collections**
+and, for a scene or a video, [**Wallpaper Engine options**](#wallpaper-engine-options).
+General, display and property disclosures keep their state while the same
+wallpaper stays selected; another wallpaper starts at the top with its sections at their
+defaults.
 
 Property rows place the label on the left and the checkbox, slider/value, combo
 menu or color swatch on the right; text and file editors use the full width below
@@ -148,7 +153,7 @@ label and the choice's value are unchanged. The words are English, and the panel
 translates them whenever the same phrase is already a catalog entry.
 
 A wallpaper may carry its own translations in `general.localization`: a table per
-Wallpaper Engine language code (`en-us`, `zh-chs`, `zh-cht`, `ja-jp`) that maps
+Wallpaper Engine language code (`en-us`, `zh-chs`, `zh-cht`, `ja-jp`, `ko-kr`, `pt-br`…) that maps
 the `ui_…` tokens its labels and combo options use to text. A label or combo
 option that is exactly one of those tokens (surrounding spaces ignored) shows the
 text from the app's language, then from `en-us`, and otherwise stays as the author
@@ -162,33 +167,38 @@ sends its language to the bridge at launch and whenever the language changes, an
 the open inspector relabels at once without reloading the wallpaper or touching
 pending edits.
 
-Authors use HTML labels as a layout surface. `WebUI/property-label.js` parses them
-inertly and reconstructs a small presentation allowlist: headings, paragraphs, line
-breaks, emphasis, font colors, centered content, dividers, links and images. Author
-scripts, styles, embedded documents, form controls, event handlers and panel action
-attributes are discarded. Plain labels remain available for accessibility and
-native file pickers. An empty text property is omitted; a control without a
+Authors use HTML labels as a layout surface. `PropertyLabelDocument`
+(`App/Views/ControlPanel/Inspector/`) parses them as data, the way a browser would
+repair broken markup, and keeps a small presentation allowlist: headings, paragraphs,
+line breaks, lists, emphasis, sizes, font colors (hex values and common names),
+centered content, dividers, links and images; `PropertyLabelView` draws the result as
+attributed text, rules and registered images. Author scripts, styles, embedded
+documents and form controls are dropped with their contents, other unknown elements
+keep only their text, and the source, the number of nodes and the depth are bounded.
+Plain labels remain available for accessibility and native file pickers. An empty text property is omitted; a control without a
 readable name uses **Unnamed option**, never the editor's markup-derived id.
 
 A `group` record is a section heading for the controls after it, so it is shown
-as a bold, ruled heading (exposed to assistive technology as a level-3 heading)
-rather than as muted description text. It takes the same sanitised label as any
+as a bold heading with a rule above it (marked as a heading for VoiceOver) rather
+than as muted description text. It takes the same sanitised label as any
 other, is omitted when it has no words, and is not collapsible: Wallpaper Engine
 groups only label what follows and own no rows of their own.
 
-Author artwork is loaded only through registered `mwe-ui://property-image/`
-routes. `PropertyImageCache` fetches HTTPS raster images natively from the
+Author artwork is loaded only for the image addresses the label registered, as a
+`PanelImageSource.propertyImage` the panel's image pipeline checks again before it
+reads anything. `PropertyImageCache` fetches HTTPS raster images natively from the
 allowlisted image CDNs (`i.ibb.co`, `i.imgur.com`, the supported Steam image hosts
 and QQ's photo-store hosts), rechecks redirects, and rejects credentials, custom
-ports, unregistered routes, oversized images and non-raster content. PNG
+ports, unregistered addresses, oversized images and non-raster content. PNG
 transparency and GIF animation are preserved, and repeated dividers share a
 bounded in-memory cache. At most four author-image transfers run across all hosts;
 a URL's load is shared by its consumers and cancelled when the last one goes away.
 Other image hosts are omitted (alt text is retained). Images remain author-hosted,
 need network access on a cache miss and are not copied into the app bundle.
-Supported author links use the native external-link policy, including Bilibili
-profile/article pages, and open only when clicked; unsupported links keep their
-text without a clickable action.
+Supported author links use the panel's external-link allowlist (`ExternalLink`),
+including Bilibili profile/article pages, and open only when clicked; unsupported
+links keep their text without a clickable action. A link is part of the label's text
+(VoiceOver's rotor reaches it), not a separate keyboard stop.
 
 An authored visibility rule decides whether a property is listed, and the
 bridge re-evaluates it after every draft edit. A rule may combine property
@@ -209,7 +219,9 @@ scene file alone says what a value switches on or off ([scene
 rendering](scene-rendering.md)). The rules are evaluated when the panel's property
 list is built, never per frame, and the scene resolves its bindings when it loads
 and on a property change. A rule that is always false, such as a bare `false`,
-hides its property for good, as Wallpaper Engine does.
+hides its property for good, as Wallpaper Engine does. A setting bound to a
+property the wallpaper never declares keeps its own authored value, with or
+without a `condition`, until a property document supplies that name.
 
 Audio, scaling mode, position and frame rate take effect immediately. Everything
 else is pending until committed:
@@ -221,7 +233,8 @@ Unsubmitted text stays with its wallpaper when navigating between pages. A dirty
 or unsubmitted control shows a localized **Modified** flag outside its
 author-provided label; Reset clears the flag once the property is clean.
 
-**Restore all defaults**, a link above the controls beside the presets, stages
+**Restore all defaults**, a link at the top of the **Wallpaper properties** card, under
+the presets, stages
 the authored default of every property at once instead of one reset icon at a
 time. It is pending like any other edit: **Apply changes** keeps it and **Revert**
 brings back every value and **Modified** flag. It also drops text not yet sent and
@@ -238,11 +251,62 @@ a wallpaper built around "choose your own picture" shows the picture. The choice
 takes effect on **Apply changes**, which reloads the scene; the picker stores the
 path, not a copy, so moving or deleting the file leaves that slot on the artwork
 the author shipped. A picture outside the app's own storage is not readable from
-the sandboxed lock-screen extension, which keeps the authored texture there.
+the sandboxed lock-screen extension, which keeps the authored texture there. A
+picture chosen for a solid placeholder layer, the user's own or one a preset ships,
+is shown as it is: the layer's colour, often the scheme colour, only paints the
+placeholder while no picture fills it.
+
+### Wallpaper Engine options
+
+**Wallpaper Engine options**, the inspector's last card, holds the
+options Wallpaper Engine adds to every scene and video wallpaper itself
+(`wallpaper64.exe` `sub_140104B60`; `artifacts/we-parity/decompiles/H-P0-2.md`,
+`H-P0-3.md`), saved per wallpaper under `engine_options` in its configuration file:
+
+| Row | Control | Default | Notes |
+|---|---|---|---|
+| **Color adjustments** | switch | off | lists the four sliders below |
+| **Brightness**, **Contrast**, **Saturation**, **Hue shift** | slider 0–100 | 50 | listed while **Color adjustments** is on; 50 changes nothing |
+| **Image filter** | menu | **No filter** | the colour lookup tables in the shared assets' `materials/lut` |
+| **Filter strength** | slider 0–100 | 100 | listed while a filter is chosen |
+| **Flip horizontally** | switch | off | mirrors the picture and the pointer |
+| **Mouse parallax** | switch | on | scenes whose camera follows the cursor only |
+| **Playback rate** | slider 10–200 % | 100 | scenes and videos (Wallpaper Engine offers it for both) |
+
+**Mouse parallax** is listed only for a scene whose own file turns the cursor camera
+parallax on (`cameraparallax` true and a mouse influence other than 0); the bridge reads
+that once per version of the scene file (`EngineFacade::read_scene_traits`,
+`engine/scene_traits.rs`) and a scene it cannot read offers no switch. The image filters
+are the `.tex` files directly in `materials/lut` (at most 256, sorted without regard to
+case, `engine/lut_catalog.rs`), read again only when that folder changes. A filter's
+name is its file name in words: a leading `lutx<digits>_` is dropped, underscores become
+spaces and the first letter is capitalised (`lutx32_daisy` reads **Daisy**); it is never
+translated. A saved filter that is no longer installed shows no selection, and the
+scene draws no filter for it.
+
+The rows work like property rows (`PropertyRowView` with the `.engineOption` scope):
+a reset icon, a **Modified** flag, and values staged until **Apply changes** keeps them
+or **Revert** undoes them. The card has its own **Restore all defaults** link, which
+stages every option's default, a value behind an off switch included, and touches
+neither the authored properties, display settings, audio nor presets; **Revert** undoes
+it. The section opens by itself when an option differs from its default. The bridge
+refuses an option the wallpaper does not offer, a switch given anything but on or off,
+a slider value outside its range, and a filter the assets do not hold
+(`edit_engine_option`, `restore_engine_option_default`,
+`restore_all_engine_option_defaults`).
+
+A scene shows an edit live under [the Settings switch](#showing-edits-on-the-desktop)
+and in the preview window, slider drags included (`pending_engine_options` of
+`preview_wallpaper_properties` and `wallpaper_preview`); the renderer changes values,
+flip, rate and mouse parallax in place and loads the scene again only when the colour
+pass or the filter is switched on or off, or another filter is chosen
+([scene rendering](scene-rendering.md#wallpaper-engines-per-wallpaper-options)). A
+video's options are saved now and wait for **Apply changes**. Presets hold only the
+authored properties.
 
 ### Showing edits on the desktop
 
-**Settings → General → Startup & desktop → Show property edits on the desktop as I
+**Settings → Desktop & Lock Screen → Desktop → Show property edits on the desktop as I
 make them** lets the displays that draw a scene wallpaper follow its pending
 properties before **Apply changes**. It is off until the user turns it on, a choice
 kept on this Mac only (`WallpaperMachine.livePropertyEdits`, `LivePropertyEditing`)
@@ -257,8 +321,9 @@ With the switch on, a slider, a colour, a switch, a choice, **Restore default**,
 a chosen file are each followed by one update once the edits pause for 150 ms
 (`PropertyPreviewScheduler`), so a drag or a preset costs a display one update, and an
 edit that arrives while one is under way queues one more. The update is the
-bridge's `preview_wallpaper_properties(wallpaper_id, show, pending)`: it shows the whole
-pending state on every scene that draws the wallpaper, mirrors included, so a restored
+bridge's `preview_wallpaper_properties(wallpaper_id, show, pending, pending_engine_options)`:
+it shows the whole pending state, the [Wallpaper Engine options](#wallpaper-engine-options)
+included, on every scene that draws the wallpaper, mirrors included, so a restored
 default is back at the authored value. Turning the switch on shows nothing by itself; the
 next edit does.
 
@@ -300,8 +365,9 @@ the saved value.
 - Turning the switch off puts the saved look back on every wallpaper whose displays
   were shown an edit; the edits stay pending in the inspector. A refusal is retried the
   next time the switch is turned off.
-- Only scene wallpapers are shown. A video has no properties, and a Web wallpaper
-  receives its changed properties after **Apply changes**.
+- Only scene wallpapers are shown. A video has no properties and its Wallpaper Engine
+  options wait for **Apply changes**, and a Web wallpaper receives its changed properties
+  after **Apply changes**.
 - A refused update is logged (`properties: …`) and never shown as an alert, so an edit in
   progress is not interrupted; the next edit tries again. Apply and Revert drop the
   update that is waiting, and the edits Apply itself sends for text it was holding start
@@ -315,7 +381,9 @@ the saved value.
 **Wallpaper properties → Save current…** stores a named preset of the currently
 applied authored properties; pending edits must first be applied or reverted.
 Choose a preset and **Apply**, rename or delete it, or export/import its versioned
-JSON document. Import saves a new preset and never applies it automatically. These
+JSON document. Import saves a new preset and never applies it automatically; a pick that
+is not a regular file (an alias, a folder) or is larger than 48 MB is refused with a
+message saying what a preset file has to be. These
 are wallpaper-specific property presets, not the Performance quality tiers.
 
 Application validates every saved property against current types, limits and
@@ -358,14 +426,39 @@ app-generated page from an earlier template is upgraded once, and only if its
 provenance, resources and exact unmodified template match; authored or modified
 HTML is never rewritten.
 
+### Fit with blurred backdrop
+
+A display's **Scaling mode** in the inspector, and **Scaling** in **Settings › Displays**
+(where it reads **Match with blurred backdrop**), offers **Fit with blurred backdrop** for
+scene and video wallpapers. It shows the whole wallpaper as Fit does, and where the
+display's shape differs from the wallpaper's (a 16:9 scene on a 3440 x 1440 ultrawide or
+a 2056 x 1329 MacBook panel) it fills the room around it with a blurred, darker copy of
+the same moving picture instead of black. The picture itself is Fit's, pixel for pixel;
+the copy covers the screen the way Fill would, centred. Fill, Wallpaper Engine's
+**Cover**, stays the default; Wallpaper Engine itself has no blurred fill.
+
+Like every scaling mode it is saved at once, for that wallpaper on that display, and the
+running wallpaper changes without restarting. The scale factor and the position sliders
+move and size the picture as under Fit; the copy behind it stays centred. Nothing is
+blurred, and nothing extra is drawn, when the wallpaper already fits the display's
+shape. The lock screen, the screen saver and the Mission Control picture show the same
+copy. A video the native video player draws keeps Fit's black bars, on the desktop and in
+its Mission Control picture (the lock screen and the screen saver still blur them): the
+player has no blurred fill, and a note under the menu says so, with **Open Performance** to choose
+Compatibility for **Video playback**, which draws the copy. A web page always fills its
+window, so the menu offers the mode only for scenes and videos (a display already set to
+it keeps it listed). It costs GPU time on every frame drawn
+([scene rendering](scene-rendering.md#fit-with-blurred-backdrop)). An older build reads the
+saved choice as Fill.
+
 ### Display position
 
 A scene or video wallpaper's card for each display, in the inspector's **Displays**
 section, has **Horizontal position** and **Vertical position** sliders (0 to 100%, 50% is
 the middle) and a **Center** link, below the frame rate. They decide where the wallpaper
-sits when the display leaves room around it (Fit, Original size, or a Scale factor
-below 1) and which part stays in view when it is larger than the display (Fill, or a
-factor above 1). Nothing moves when it already fits the display exactly, and an axis
+sits when the display leaves room around it (Fit, Fit with blurred backdrop, Original
+size, or a Scale factor below 1) and which part stays in view when it is larger than the
+display (Fill, or a factor above 1). Nothing moves when it already fits the display exactly, and an axis
 with no room to spare does not move; the note under the sliders says so. The block is
 not offered for a web wallpaper (an image page keeps **Position on screen**, above),
 and a mirror display has no card, because it is always centred.
@@ -396,22 +489,45 @@ picture is taken again ([desktop picture](desktop-picture.md#when-a-poster-is-ta
 and the lock screen and screen saver draw the wallpaper at the same position
 ([lock screen](lock-screen.md#where-the-picture-sits)).
 
-Both scene renderers honour the position, and so does Compatibility video playback,
-which draws a video as a one-texture scene. The native video player draws a video
-centred whatever the position says. A video it draws shows a note saying so, with a
-link to Performance settings, where choosing Compatibility for **Video playback** lets
-the position apply; the sliders stay available, and the saved position still reaches
-the lock screen. The page learns which displays the native player draws from the
-running backend reports, so a wallpaper with no report yet shows the plain note.
+A scene honours the position, and so does video playback: the native video players place
+their layer by the same layout (`NativeVideoLayout`), so a clip that is larger than the
+display, or smaller, sits where the sliders put it whichever player draws it. A mirror is centred,
+as it is for a scene. The native player has no per-step preview: while a slider is
+dragged the picture on a clip it draws stays where it was, and it moves once the
+drag settles on a value, which is what is saved. The Mission Control picture is
+taken again after the move.
 
 ### Compatibility check
 
 An installed wallpaper's **Compatibility check** reads entry/shared resources and,
-for video, asynchronously checks native admission for the selected display and
-frame-rate constraints. Checks are explicit and version/configuration-bound.
-Unknown scene shader/graph or Web runtime behavior remains **unknown**; readable
-files and video metadata are not proof of a displayed frame. The same card shows
-the actual running backend and fallback reason when the runtime reports them.
+for video, asynchronously checks native admission for the selected display: whether
+macOS can open the file, since a clip plays at its own frame rate. Checks are explicit
+and version/configuration-bound.
+
+For a scene, **Check compatibility** also reads the whole scene through the renderer, the
+way loading it does (its saved options, the shared resources, the parser and the Metal
+translation of its shaders) but without a display, a GPU or sound, so nothing on screen
+changes. It takes seconds for a large scene and runs only when the button is pressed,
+and only when the shared resources are installed. It answers two rows:
+
+- **Scene shader and graph support** says whether Native Metal would refuse the scene,
+  with the renderer's reason, or that it found nothing it cannot draw. Shader compilation
+  for the GPU and the render graph only happen when the scene is drawn, so a clean read is
+  not a promise.
+- **Files the scene names** lists, by layer, the files the scene asks for and does not
+  have (at most 64 are recorded and the row shows eight). Wallpaper Engine draws what it
+  can, and so does the app: a layer that needs a missing file is drawn without it or not at
+  all, and the scene is still applied.
+
+What Native Metal concluded about a scene, from such a check or from running it, is kept in
+`SceneDrawVerdicts.json` in the app's support folder for the app build and the scene's files
+it was reached with (`project.json` and `scene.pkg` or `scene.json`, by size and date). The
+scene row shows it before any check: drawn, nothing found by a check, or refused with the
+reason. A new app version, a Workshop update or a reinstall makes it unknown again; a
+failure a retry can clear (a frame, the surface) is never kept. Unknown Web runtime
+behavior remains **unknown**; readable files and video metadata are not proof of a
+displayed frame. The same card shows the actual running backend when the runtime reports
+it, and, for a scene Native Metal cannot draw, why it is held.
 When the installed project or its entry file is unavailable and the wallpaper is
 a Workshop item, the card also offers [Reinstall from Workshop…](workshop-downloads.md#reinstall-from-workshop).
 
@@ -452,10 +568,10 @@ When a factor is named, **Set scale factor to ×N** fills in the target display'
 **Scale factor** with it. The click goes through the same bridge call as the
 Displays section's field, so it joins the pending changes: **Apply changes** saves
 it and **Revert** restores the saved factor, and like typing in that field it is
-previewed on the display while the wallpaper is playing there. The page sends only
-the wallpaper and display; the factor is recomputed in Swift from the stored bars,
-the clip's proportions and the display's size at the moment of the click, so
-nothing the page sends can change it.
+previewed on the display while the wallpaper is playing there. The button names only
+the wallpaper and display; the factor is recomputed from the stored bars, the clip's
+proportions and the display's size at the moment of the click, so nothing the view
+holds can change it.
 
 The click is refused, and changes nothing, when the card no longer matches what is
 selected and configured: another wallpaper or display, a mirror or disabled
@@ -466,15 +582,15 @@ and identity; if the file was replaced since the check, the result is dropped, t
 click reports that the video changed, and the card goes back to offering a new
 look.
 
-Both video backends apply the scale factor with the same Fill layout ([Video
-backend](performance.md#video-backend)), so the button does not depend on which one
+Both video players apply the scale factor with the same Fill layout ([Video
+playback](performance.md#video-playback)), so the button does not depend on which one
 plays the clip. Once the display holds the factor the card drops the button. It adds
 the line about Apply changes and Revert only for the factor this card set, and only
 while that factor is still waiting in the unsaved draft: the app remembers what it
 set, and forgets it when the draft is applied or reverted, the factor is edited, or
 another wallpaper or display is shown. A factor that was already saved never gets the
 line, however many other edits the wallpaper has pending. The numbers on the card come
-from the snapshot, not from what the page did last. The lock-screen configuration
+from the stores, not from what the view did last. The lock-screen configuration
 carries the display's scale factor as well; no routine test exercises that path.
 
 Sampled evidence is not proof: a scene that keeps a black border through all five

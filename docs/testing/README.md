@@ -46,7 +46,12 @@ Routine verification **must not**:
 - sign in to Steam, run a real SteamCMD login, or approve a Gatekeeper prompt,
 - replace or restart the installed `/Applications/WallpaperMachine.app`.
 
-Each of those requires an explicit user decision. `python3 scripts/test.py --ui`
+Each of those requires an explicit user decision, with one standing exception: a
+wallpaper fix may download the reported Workshop item with the app's saved Steam
+sign-in (`scripts/we_reference.py fetch`, never a new sign-in), wake the Parallels
+Windows VM, capture Wallpaper Engine's frames in it with Wallpaper Engine muted, and
+suspend it again ([wallpaper-fixes.md](wallpaper-fixes.md),
+[wallpaper-engine-reference.md](wallpaper-engine-reference.md)). `python3 scripts/test.py --ui`
 and the manual smoke checklist take over the desktop and are neither part of
 routine verification nor a required release gate. See
 [../../AGENTS.md](../../AGENTS.md) for the agent-facing form of this rule and
@@ -59,21 +64,25 @@ scheme excludes UI tests.
 
 ## Test layers
 
-Use Python 3.10 or newer for the routine gate: `test_brand.py` uses
-`zip(strict=True)`, which the Python 3.9 shipped with some Xcode installations
-does not support. If `python3 --version` reports 3.9, run the commands below
-with an installed newer interpreter (for example, `python3.12`).
+Use Python 3.11 or newer for the routine gate: the scripts and their tests use
+`zip(strict=True)` and `hashlib.file_digest`, which the Python 3.9 shipped with
+macOS and Command Line Tools does not have. If `python3 --version` reports 3.9,
+install Homebrew's `python` ([build prerequisites](../build.md#prerequisites)) or
+run the commands below with an installed newer interpreter (for example,
+`python3.12`).
 
 | Layer | Location | Command |
 | --- | --- | --- |
-| Python script tests | `scripts/tests/` | `python3 scripts/test.py` (runs first, before Xcode) |
+| Python script tests | `scripts/tests/` | `python3 scripts/test.py` (runs first, before Xcode); `--python-only` alone, which the Checks workflow runs on Linux for every pull request into `main` |
 | Swift unit/integration | `Tests/Unit/<Domain>/` | `python3 scripts/test.py` (`WallpaperMachineTests`); `--only <TestClass>` for a subset |
 | XCUITest (desktop) | `Tests/UI/` | `python3 scripts/test.py --ui` — opt-in only |
 | Media/device integration | `Tests/Unit/NativeVideo/`, `Tests/Unit/Library/VideoLetterboxProbeMediaTests.swift` | `WALLPAPER_MACHINE_MEDIA_TESTS=1 python3 scripts/test.py` — opt-in only |
 | Live Steam pages / native SteamCMD install | `Tests/Unit/Workshop/WorkshopTests.swift`, `Tests/Unit/Steam/SteamCMDLiveInstallTests.swift` | `WALLPAPER_MACHINE_NETWORK_TESTS=1 python3 scripts/test.py` — opt-in only |
-| Rust crates | `upstream/renderer/crates/` | `python3 scripts/check_rust.py` runs the isolated release checks and reports exclusions/skips; individual Cargo commands remain available |
-| C++ renderer tests | `upstream/renderer/external/open-wallpaper-engine` | `python3 scripts/check_renderer.py` uses one `REGRESSION_BINARIES` registry for build, execution and the verdict, plus image/reload probes. Some test binaries (`scene_schema_tests`, `script_runtime_compat_test`, `mouse_input_test` and others) are not in that list and are built and run by hand; [renderer.md](renderer.md#ccmake-test-binaries) lists them and the commands |
-| Headless GPU probes | same CMake tree | explicitly invoked executables (`offscreen_scene_probe`, `scene_reload_cycle_probe`, `playback_gpu_test`, `wpdump`); see [renderer.md](renderer.md) |
+| Rust crates | `Renderer/Shader`, `Renderer/Core`, `Renderer/Bridge` | `python3 scripts/check_rust.py` runs the isolated release checks and reports exclusions/skips; individual Cargo commands remain available |
+| C++ renderer tests | `Renderer/Engine` | `python3 scripts/check_renderer.py` uses one `REGRESSION_BINARIES` registry for build, execution and the verdict, plus image/reload probes. Every test binary the regression docs name is registered, and every other test executable is too or is listed with its reason in `MANUAL_BINARIES`; [renderer.md](renderer.md#ccmake-test-binaries) lists what a registered binary must do without (a window, an audio device, shared temporary files) and how to run one by hand while iterating |
+| License closure | built app, `Renderer/`, `ThirdParty/` | `python3 scripts/check_licenses.py` lists every Mach-O dependency of the built app (`otool -L`, walked recursively), the code compiled or statically linked into the renderer (a source inventory with a hand-kept license table) and every linked Rust crate (`cargo tree`; a vendored path crate under `ThirdParty/`, such as `naga`, counts as third party with the license its `Cargo.toml` declares), each with its SPDX license, and classifies them against the policy table in the script (GPL-3.0-only: a GPLv3-compatible license passes; GPL-2.0-only, known GPLv3-incompatible licenses such as EPL-1.0 or CDDL-1.0, and unknown licenses fail). Report-only by default; `--enforce` exits 1 on a finding or when the default Release build is missing (an incomplete check is not a pass); `--app` picks the bundle (default: the Release build), `--skip-app` skips the dylib walk as an explicit choice that `--enforce` accepts and the verdict line names. Read-only: it never builds, installs or launches anything. Run it after any dependency, link-line or `Cargo.lock` change; it needs Homebrew and Cargo, so the routine gate does not run it |
+| License notices | built app, cargo registry, Homebrew kegs | `python3 scripts/notices.py` writes `THIRD-PARTY-NOTICES.txt` (default `artifacts/licenses/`): for every third-party component of the same closure `check_licenses.py` reports, its name, version, SPDX license and the license text taken from the component itself (the crate's `LICENSE*` files in the cargo registry or under `ThirdParty/`, the Homebrew keg's license files, a vendored library's file or header notice; a dual `MIT OR Apache-2.0` crate carries the MIT text). A component whose text is not found is marked `LICENSE TEXT NOT FOUND` in the file and named in the output. Report-only by default; `--enforce` exits 1 on a gap; `--app`/`--skip-app` as for `check_licenses.py`. `scripts/package.py` runs the same generator and bundles the file. Needs Homebrew, Cargo and a populated cargo registry (`cargo fetch` or any earlier build), so the routine gate does not run it |
+| Headless GPU probes | same CMake tree | explicitly invoked executables (`offscreen_scene_probe`, `scene_reload_cycle_probe`, `wpdump`); see [renderer.md](renderer.md) |
 
 `python3 scripts/test.py` is the routine gate: it runs the Python script test
 modules side by side (each isolates itself in temporary directories, and every
@@ -87,8 +96,69 @@ result bundle. A green run prints nothing but the verdict; open the log or
 rerun with `--verbose` when the raw stream is the point. `scripts/build.py`
 filters the same way into `artifacts/build/<stage>-<timestamp>.log`.
 Cargo and CMake commands need the Homebrew environment that `scripts/build.py`
-assembles; run the Rust commands from `upstream/renderer`. Build prerequisites
+assembles; run the Rust commands from `Renderer/`. Build prerequisites
 are in [../build.md](../build.md).
+
+Bridge operation regressions in `Renderer/Bridge/src/api/operation_contract_tests.rs`
+exercise the real actor, transport, state/configuration and journal with isolated
+files and controlled engine IO. They distinguish saved, pending, published and live
+state across persistence failures, stale completions, repair and Cancel. Core/prune/
+readiness still share the real serialized facade turn. Out-of-order completion cases
+park the last actually processed render-scale result, at explicitly reduced scale,
+after mutation and lock release—not inside overlapping held core turns or midway
+through audio registration. Narrow test-only observations and initial-value seeds
+do not simulate publication or export the whole actor state. These cases establish
+no native-renderer, visual, hardware or permission fidelity.
+
+The Apply/settings consumer children distinguish an unsaved wallpaper draft from
+property/display reset markers: saved nondefault choices remain resettable even
+when the enclosing options are clean. Clean Apply is not a startup primitive; use
+real Bootstrap for configured startup and actual edits for Apply transitions. A
+controlled live setter must update the direct-template snapshot as well as its
+observation cell, or refresh classification observes a stale scene. Scenario-owned
+request waits retain cancellation and join ownership across timeouts; canceling a
+wait does not replace the real actor drain before disposing owned paths.
+One separately identified `FakeEngineFacade` case preserves synthetic core-blocked
+command admission. It does not model the common readiness/audio exclusion and does
+not replace the real-turn consumer cases or establish native responsiveness.
+
+Power callback cases await the matching actual handoff completion before checking
+unchanged playback/effect vectors; an already-equal vector or an early snapshot is
+not a callback receipt. Watching construction includes a synchronous baseline read,
+distinct from startup policy sampling. The controlled construction test lets that
+baseline return, then holds an actual resample and releases it before joining and
+draining. API projection fixtures also distinguish a missing first-seen monitor
+record (which may inherit Primary) from an explicitly enabled but unassigned row.
+
+The retained bridge suites share independently authored value and observation
+helpers. Profiles keep their own scale, refresh and window/pointer state; a live
+handle-only fixture is not silently converted to a direct wallpaper assignment.
+Exact reconcile waits read the actual recorded-vector length without cloning its
+scene history, retain the caller bound and assert completion. They do not replace
+the separate 3–4-call coalescing contract or the retained cache-storage assertions.
+
+The independent display/config/project/draft contract suites now carry the mapped
+self-mirror, corrupt-file backup, raw rich-text/type and Cancel-baseline assertions
+formerly duplicated in small inherited bridge tests. Constructor-pointer equality,
+record-construction echoes and shallow duplicate default inventories are deliberately
+retired, not counted as replacement lifecycle coverage. Five real consumers in
+`Renderer/Bridge/src/api/small_library_contract_tests.rs` now cover public filter replies
+and later snapshots, hidden inventory across owned concurrent refresh, supported Web
+and Scene beside unsupported Application, cleared selection in both public snapshots,
+and full configuration equality after opening a distinct store. The refresh uses two
+actors with owned paths, never a process-wide HOME change; actor drain precedes root
+deletion. Only assertion-mapped inherited cases are retired. Remaining apply/settings
+cases, contributor corrections and the entire cache-clear storage-observation case
+stay intact; suite membership alone is not evidence for deleting their assertions.
+
+The old Rust project/resource/rendergraph/runtime corpus wrappers are retired,
+together with their hard-coded developer-library paths, generated-data fallback
+and macro registry. Independent disk-manifest, source-resolution and scene-loader
+contracts retain the real type/loading/path-rejection behavior. Nonempty-object
+and default-target inventories were incidental checks, not native graph/runtime
+coverage; they are not recreated. The routine Rust gate excludes only the five
+desktop-window cases explicitly. Other asset skips remain reported, and removing
+the obsolete corpus exclusions does not make real corpus compatibility verified.
 
 An `IDELaunchServicesLauncher` assertion `childPID > 0` (exit 250) can abort
 Xcode before the native test host starts, even after successful compilation
@@ -104,7 +174,7 @@ afterwards. Standalone isolated checks do not replace the app-hosted gate.
 
 `Tests/Unit/` is grouped by domain, mirroring `App/Services/`: Appearance,
 Automation, Desktop, Diagnostics, GitHub, Library, Lifecycle, Localization,
-LockScreen, NativeVideo, Panel, Pixiv, Playlist, Preview, Steam, SystemMedia,
+LockScreen, NativeVideo, Network, Panel, Pixiv, Playlist, Preview, Steam, SystemMedia,
 UserAssets, WebWallpaper, Workshop; shared fixtures live in `Support/`.
 
 ### Opt-in layers
@@ -159,21 +229,22 @@ path. A test that passes alone but fails in the gate is the symptom; reproduce
 it with `python3 scripts/test.py --serial` and fix the shared state rather than
 the scheduling. UI runs are always serial: they drive one desktop.
 
-CI's `test` job runs `--serial` too. On hosted macOS runners, parallel runs
-intermittently fail one offscreen control-panel test with
-`InvalidTransition { phase: idle targetPhase: failed(deinit) }` — WebKit drops a
-`callAsyncJavaScript` call unanswered — while the same tests pass locally in
-parallel; on the runner, serial costs almost no wall clock. When it recurs, the
-panel fixture's error says whether the page reloaded meanwhile, and the
-`test-logs-<tag>` artifact carries the run's WebKit and jetsam reports.
+The Test workflow's `native` job runs `--serial` too: on hosted macOS runners serial
+costs almost no wall clock (the step's comment in `.github/workflows/test.yml` has the
+timings), and the `test-logs-<run id>-native` artifact carries the run's crash and
+jetsam reports when a run fails there and not locally.
 
 The per-test `UserDefaults` suite is not only a parallelism concern: the unit
 bundle runs inside the real app as its test host, so `UserDefaults.standard`
 *is* `app.wallpapermachine`, the preferences of the installed app. Any
-`WebPanelController` (or other store) built without `defaults:` writes there —
-the first-run welcome's `welcomeSeen` flag, sidebar choices, favorites — and
+`PanelController` (or other store) built without `defaults:` writes there —
+the first-run welcome's `welcomeSeen` flag, the learned drag-select hint, favorites — and
 silently changes what the app does at the next launch. Pass the test's own
-suite everywhere; `PanelFixture` does.
+suite everywhere; `PanelFixture` does. The panel fixtures (`PanelFixture`,
+`makeDiscoverPanel`, `makeBrowsingPanel`, `ShellHost`) also give the controller
+`WorkshopSearchTranslator.fake` over a `FakeTranslation`, so a Settings › General
+render or a search typed in another language never asks this Mac's Translation
+framework or depends on the languages it has downloaded.
 
 A named suite also outlives its test: `removePersistentDomain(forName:)` still
 leaves an empty `~/Library/Preferences/<suite>.plist`, because cfprefsd flushes
@@ -192,21 +263,49 @@ preference domain names follow the same override. The suite pins English and
 marks onboarding/launch announcements complete. Launch arguments pin Foundation's
 native language without changing the system domain. Teardown stops the test app,
 then removes the suite and support root, including when setup or a test fails.
-System-global readers (title-bar double-click behavior, system language and
-desktop-click preferences) keep their original domains.
+System-global readers (system language and desktop-click preferences) keep their
+original domains.
 
 The same rule covers a second shape: a test that measures a *wall-clock window*
 rather than shared state. It is still a race, it can lose alone as well as in
-the gate, and widening the sleep only moves the threshold. Two in
-`ControlPanelShellTests` were fixed rather than tolerated, and both fixes are
-the pattern to copy. One latched a snapshot count, submitted a form and read
-the count 50 ms later, so a push already in flight when the count was latched
-was indistinguishable from one the submit caused; it drains with
-`panel.quiet()` before the window. The other read `getBoundingClientRect`
-straight after `setFrameSize`, catching the layout before the page had
-reflowed; it waits for `window.innerWidth` to reach the new width. Measure
-"what did this action cause" from a settled state, and wait for a state the
-page can report rather than for a duration.
+the gate, and widening the sleep only moves the threshold. Measure "what did
+this action cause" from a settled state: await the task `controller.launch`
+returns instead of sleeping, drain what is already in flight before latching a
+count, drive timers with `ManualSleeper` (`Tests/Unit/Support/`), and wait for a
+state the model or view reports (`PanelFixture.waitUntil`) rather than for a
+duration. `waitUntil`'s two-second default is short for a loaded machine; a new
+panel test that waits on real work gives it a longer timeout.
+
+A test double that holds an answer suspends the task, never the thread:
+`PixivGate` and `PixivHeldTransport` (`Tests/Unit/Pixiv/`) hold pixiv's
+answers until the test opens the gate or the request is cancelled. A
+`DispatchSemaphore` in a fixture's answer blocks a concurrency-pool thread that
+cancellation cannot reach, so a fixture that shuts down waits out its timeout, and
+the answer lets itself through when the test runs slowly. A timed-out wait was also
+reported by Xcode's thread performance checker as a priority inversion, and the
+test host symbolicates that report on the main thread; under the gate's load that
+has held a test until its time allowance ran out. AppKit raises the same report
+itself: the first time a focused text field with unchecked text is removed, the
+main thread waits for its data detectors to load. So `test.py` turns the checker's
+priority-inversion reports off in the test host (`PERFC_DISABLE_PRIORITY_INVERSIONS`,
+forwarded as `TEST_RUNNER_PERFC_DISABLE_PRIORITY_INVERSIONS`), and a blocking
+wait in a fixture now shows only as a slow test. Work off the main actor needs its
+own sync point: a nonisolated `async` double such as `ManualSleep` runs on the
+global executor, so flushing the main queue does not show it has run; wait for the
+state it records.
+
+The hosted suite has also repeatedly reported the runtime warning “This method
+should not be called on the main thread as it may lead to UI unresponsiveness.”
+The top-level `xcresulttool` summary omits the caller. Detailed issue records in
+the 2026-10-28 gate associate it with
+`VideoFormatSupportTests.testTheOpenedFilesAreKeyedByTheFileAndForgetAChangedOne()`;
+that test passed, and the record has no source location. Report the warning beside
+the pass/fail/skip counts and inspect the detailed issue records for attribution.
+
+A failed assertion in the app-hosted bundle can take about two minutes to
+report while XCTest symbolicates the failing frame, so a failure inside a loop
+or a hosted panel can read as a hang or a timeout; look for the assertion in the
+log before raising a timeout.
 
 Before blaming your own change for a timing-shaped gate failure, confirm
 ownership: revert the change and run the gate again. A failure that survives
@@ -216,8 +315,8 @@ five times its usual wall clock is measuring contention.
 ## Verification tiers
 
 The full gate compiles the Debug app and test bundle and then runs well over a
-thousand native tests, several of which drive offscreen WebKit or a real PTY
-downloader; the test phase alone takes minutes, before any Release build. Match
+thousand native tests, several of which host the panel in offscreen windows,
+load web wallpapers in offscreen web views or drive a real PTY downloader; the test phase alone takes minutes, before any Release build. Match
 the effort to the change:
 
 | Change | While iterating | Before reporting |
@@ -226,6 +325,7 @@ the effort to the change:
 | New feature or cross-domain change | targeted runs as above | full gate once, log entry; Release build only if delivery was requested |
 | Rust crates | `cargo test` in the touched crate | full gate plus `scripts/check_rust.py` |
 | Renderer / bridge | `cargo test` or the touched CMake target | full gate plus `scripts/check_rust.py` and `scripts/check_renderer.py` |
+| How a wallpaper looks | as above for the layer touched | as above, plus a before/after comparison with Wallpaper Engine's frames ([wallpaper-engine-reference.md](wallpaper-engine-reference.md)) |
 | Docs only | link, path and command check | nothing else |
 
 `--only` skips the Python script tests and prints a warning: it is an
@@ -244,15 +344,18 @@ runs.
 | `artifacts/build/<stage>-<timestamp>.log` | `python3 scripts/build.py` (cargo, bindgen, xcodegen, xcodebuild) |
 | `artifacts/renderer/<run>/` | `python3 scripts/check_renderer.py` |
 | `artifacts/renderer/bin/` | renderer check binaries |
+| `artifacts/licenses/<run>/` | `python3 scripts/check_licenses.py` (`report.json`, `closure.txt`, `cargo-tree.txt`) |
+| `artifacts/licenses/THIRD-PARTY-NOTICES.txt` | `python3 scripts/notices.py` |
 | `build/Build/Products/{Debug,Release}/WallpaperMachine.app` | `python3 scripts/build.py` |
 
 `artifacts/` and `build/` are both Git-ignored and disposable; `python3
 scripts/clean.py` removes them (`--dry-run` previews). Only `scripts/test.py`
 prunes its own output: renderer runs (a few hundred megabytes each), Rust check
 runs, build logs and hand-made investigation folders stay until someone deletes
-them, so whoever produced them lists them and asks before deleting (see
-[AGENTS.md](../../AGENTS.md)). Result bundles are local: cite the numbers and
-the command, not a bundle path, when you report a result. Private GPU output,
+them. Before finishing, remove this task's output except evidence cited in the
+final reply, and report what was removed; preserve other tasks' output. Wider
+cleanup requires approval (see [AGENTS.md](../../AGENTS.md)). Result bundles are
+local: cite the numbers and the command, not a bundle path, when you report a result. Private GPU output,
 local asset inventories, screenshots, and traces stay out of Git.
 
 ## Current native coverage
@@ -266,7 +369,8 @@ they do not establish.
 
 1. **Pick the lowest layer that can observe the behavior.** Renderer semantics
    go to Rust or C++; bridge state goes to `wallpaper-bridge`; app services,
-   stores and panel bridging go to `Tests/Unit/<Domain>/`; developer-script
+   stores and the control panel's controller and view models go to
+   `Tests/Unit/<Domain>/` (`Panel/` for the panel); developer-script
    behavior goes to `scripts/tests/`. `Tests/UI/` is a last resort — it controls
    the desktop and therefore cannot be part of routine verification.
 2. **Keep it device-free.** No windows, no screenshots, no audio device, no
@@ -280,6 +384,15 @@ they do not establish.
    checkout runs green — see [wallpaper-corpus.md](wallpaper-corpus.md).
 5. **Use original synthetic fixtures** when you need content; do not check in
    Workshop packages or other copyrighted assets.
+6. **Expect the CI gate to run on macOS 26.** CI's runner is a macOS 26 VM
+   while developers may be on a later macOS. There SwiftUI builds no
+   accessibility tree for an unshown window until a client has contacted the app;
+   `PanelTestCase` does that once (`AccessibilityClient`), so panel tests read the
+   tree through it. Behaviour of an unshown window that only macOS 27 shows
+   (toolbar overflow, sidebar arrow keys) skips earlier with
+   `PanelTestSupport.skipBeforeMacOS27`, which leaves it unverified there.
+   `gh workflow run test.yml --ref <branch>` runs the gate on that runner
+   ([release.md](../release.md#test-testyml)).
 6. **Record the result** when the change calls for a log entry (a feature or
    cross-domain change, a changed documented behavior, or on request — see
    [Verification tiers](#verification-tiers)): the counts, the command, and what

@@ -1,6 +1,6 @@
 # Contributing
 
-WallpaperMachine is a native macOS app (SwiftUI/AppKit plus a WKWebView control
+WallpaperMachine is a native macOS app (an AppKit shell with a SwiftUI control
 panel), a sandboxed lock-screen ExtensionKit extension, and a vendored Rust/C++
 renderer. This page gets you running and points at the document that owns each
 topic; it does not repeat them.
@@ -8,12 +8,12 @@ topic; it does not repeat them.
 Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md). Found a
 vulnerability? Report it privately, as [SECURITY.md](SECURITY.md) describes, not in
 an issue. Bugs and ideas go through the issue forms; questions go to the
-Discussions Q&A.
+Discussions Q&A or MMFoundation's [Discord](https://mmfoundation.dev/discord).
 
 ## Setup
 
 An Apple silicon or Intel Mac, macOS 15.6 or later, and a full Xcode 26 selected with
-`xcode-select`. Install the Homebrew packages and the project's LGPL FFmpeg that
+`xcode-select`. Install the Homebrew packages that
 [docs/build.md](docs/build.md#prerequisites) lists, then:
 
 ```sh
@@ -28,7 +28,7 @@ generates the Xcode project and builds the app. Flags and failure modes:
 
 ## Day-to-day loop
 
-1. Edit sources. Swift/`WebUI`/resource changes rebuild with
+1. Edit sources. Swift and resource changes rebuild with
    `python3 scripts/build.py --swift-only`; renderer changes need a full
    `python3 scripts/build.py`.
 2. While iterating, run `python3 scripts/test.py --only <TestClass>` for the
@@ -57,6 +57,7 @@ generates the Xcode project and builds the app. Flags and failure modes:
 | Find out where a file or new code belongs | [docs/repository-layout.md](docs/repository-layout.md) |
 | Build, package, or install locally | [docs/build.md](docs/build.md) |
 | Know the code, test and doc rules | [docs/conventions.md](docs/conventions.md) |
+| Translate the app, improve existing wording or ask for a language | [Crowdin](https://translate.wallpapermachine.app/project/wallpaper-machine), then [docs/localization.md](docs/localization.md#contributing-translations) |
 | Write or run tests, or record evidence | [docs/testing/README.md](docs/testing/README.md) |
 | Debug the renderer or GPU output | [docs/testing/renderer.md](docs/testing/renderer.md) |
 | Ship a version | [docs/release.md](docs/release.md) |
@@ -72,7 +73,7 @@ The rules contributors trip over; [AGENTS.md](AGENTS.md) and
 - **Never hand-edit generated files.** `WallpaperMachine.xcodeproj` comes from
   `project.yml`; `App/Bridge/Generated` comes from `uniffi-bindgen`. Change the
   source, regenerate, commit both.
-- **Never change `upstream/` without updating `upstream/provenance.json`.** That
+- **Never change `ThirdParty/` without updating `ThirdParty/provenance.json`.** That
   file is the record of which third-party revision is vendored.
 - **Never commit `artifacts/` or `build/`.** Both are Git-ignored and disposable.
   Screenshots, traces, wallpaper payloads, Steam session data and personal paths
@@ -113,14 +114,72 @@ The rules contributors trip over; [AGENTS.md](AGENTS.md) and
 - The [PR template](.github/pull_request_template.md) carries the checklist, and
   the definition of done is in [docs/conventions.md](docs/conventions.md#definition-of-done).
 
+## License and sign-off
+
+WallpaperMachine is licensed under the GNU GPL version 3 only ([LICENSE](LICENSE));
+[LICENSING.md](LICENSING.md) records where its code came from and the licenses of the
+components it uses. By contributing you agree that your contribution is licensed under
+the same terms, GPL-3.0-only, and that it does not carry code you may not license that
+way: code available only under GPL-2.0-only, for example, cannot be accepted.
+
+Sign off the commits of a pull request with `git commit -s`, and tick the sign-off box in
+the pull request; a squash merge drops per-commit trailers, so the box is what remains.
+The sign-off certifies the Developer Certificate of Origin below, as published at
+https://developercertificate.org/:
+
+```text
+Developer Certificate of Origin
+Version 1.1
+
+Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+
+Developer's Certificate of Origin 1.1
+
+By making a contribution to this project, I certify that:
+
+(a) The contribution was created in whole or in part by me and I
+    have the right to submit it under the open source license
+    indicated in the file; or
+
+(b) The contribution is based upon previous work that, to the best
+    of my knowledge, is covered under an appropriate open source
+    license and I have the right under that license to submit that
+    work with modifications, whether created in whole or in part
+    by me, under the same open source license (unless I am
+    permitted to submit under a different license), as indicated
+    in the file; or
+
+(c) The contribution was provided directly to me by some other
+    person who certified (a), (b) or (c) and I have not modified
+    it.
+
+(d) I understand and agree that this project and the contribution
+    are public and that a record of the contribution (including all
+    personal information I submit with it, including my sign-off) is
+    maintained indefinitely and may be redistributed consistent with
+    this project or the open source license(s) involved.
+```
+
 ## Automated review
 
-Same-repository PRs are reviewed by Claude Code
-(`.github/workflows/claude-code-review.yml`), which posts inline comments. A fork
-PR gets that review when a maintainer adds the `claude-review` label; the review
-never checks out or runs the PR's code, and the label is removed afterwards so a
-maintainer can add it again for new commits. Mentioning `@claude` in an issue or a
-comment runs `.github/workflows/claude.yml`.
+Every pull request into `main` runs the Checks workflow (`.github/workflows/checks.yml`): the
+Python script tests on Linux, a minute or two, the same as
+`python3 scripts/test.py --python-only` locally. CodeQL runs on pushes to `main`,
+weekly and on demand, not on pull requests. The native gate does not run on pull
+requests either: run `python3 scripts/test.py` locally, or the Test workflow by hand.
+
+Claude Code runs on the Claude account of `fzlzjerry`, so only that account wakes
+it; events from anyone else, including re-runs, are skipped. A same-repository PR
+is reviewed (`.github/workflows/claude-code-review.yml`, inline comments) when
+`fzlzjerry` opens it or pushes to it. Any other PR, a fork PR included, gets that
+review when `fzlzjerry` adds the `claude-review` label; the review never checks
+out or runs the PR's code, and the label is removed afterwards so it can be added
+again for new commits. A `@claude` mention by `fzlzjerry` in an issue or a comment
+runs `.github/workflows/claude.yml`.
 
 ## Automated contributors
 

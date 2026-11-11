@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Metal
 import Security
 
@@ -17,7 +18,7 @@ enum TelemetryEnvironment {
         return TelemetryReport.AppInfo(
             version: matching(version, #"^\d{1,4}(\.\d{1,4}){0,3}$"#) ?? "0",
             build: matching(build, #"^[0-9A-Za-z.]{1,16}$"#) ?? "0",
-            source: !hasTeamSignature())
+            source: isSource(signingInformation: signingInformation(), signedWithDeveloperID: signedWithDeveloperID(ownCode())))
     }
 
     @MainActor
@@ -47,8 +48,7 @@ enum TelemetryEnvironment {
         let main = NSScreen.main
         var result: [UInt32: TelemetryReport.Display] = [:]
         for screen in NSScreen.screens {
-            guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-            else { continue }
+            guard let id = SystemDisplays.id(of: screen) else { continue }
             let scale = screen.backingScaleFactor
             result[id] = TelemetryReport.Display(
                 width: Int((screen.frame.width * scale).rounded()),
@@ -67,16 +67,57 @@ enum TelemetryEnvironment {
         value.range(of: pattern, options: .regularExpression) == nil ? nil : value
     }
 
-    /// The signed release carries a Developer ID team; a build from source is signed ad hoc.
-    private static func hasTeamSignature() -> Bool {
+    /// SHA-256 of the DER-encoded project certificate `WallpaperMachine Code Signing`, which
+    /// signed the releases before they were signed with the Developer ID. This telemetry
+    /// fingerprint is separate from the code-signing requirement's SHA-1
+    /// (`docs/build.md#release-signing`).
+    static let releaseCertificateSHA256 = "5628ff548673a0cc17cbfc2de3298461be3340e00737a50f5356f5fcc84d364c"
+
+    /// A copy is the release when the project's Developer ID signed it (`signedWithDeveloperID`,
+    /// checked against `AppUpdateConfiguration.developerIDRequirement`), or the project
+    /// certificate as a leaf. That certificate is self-signed and carries no team, so its team
+    /// says nothing; a build from source is signed ad hoc, without certificates, or with its
+    /// builder's own certificate or Developer ID.
+    static func isSource(signingInformation: [String: Any]?, signedWithDeveloperID: Bool = false) -> Bool {
+        if signedWithDeveloperID { return false }
+        guard let signingInformation else { return true }
+        if let flags = signingInformation[kSecCodeInfoFlags as String] as? NSNumber,
+            SecCodeSignatureFlags(rawValue: flags.uint32Value).contains(.adhoc)
+        {
+            return true
+        }
+        guard let leaf = (signingInformation[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first
+        else { return true }
+        let digest = SHA256.hash(data: SecCertificateCopyData(leaf) as Data)
+        return digest.map { String(format: "%02x", $0) }.joined() != releaseCertificateSHA256
+    }
+
+    /// Whether the running `code` is signed by Apple's Developer ID chain for the project's
+    /// team. The kernel already validated the running code, so this costs no rehashing of
+    /// the bundle, and a signature that merely names the team does not pass.
+    static func signedWithDeveloperID(_ code: SecCode?) -> Bool {
+        var requirement: SecRequirement?
+        guard let code,
+            SecRequirementCreateWithString(AppUpdateConfiguration.developerIDRequirement as CFString, [], &requirement)
+                == errSecSuccess, let requirement
+        else { return false }
+        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+    }
+
+    static func ownCode() -> SecCode? {
         var code: SecCode?
-        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
+        guard SecCodeCopySelf([], &code) == errSecSuccess else { return nil }
+        return code
+    }
+
+    private static func signingInformation() -> [String: Any]? {
+        guard let code = ownCode() else { return nil }
         var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return false }
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
         var information: CFDictionary?
         guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
-            == errSecSuccess, let information = information as? [String: Any]
-        else { return false }
-        return information[kSecCodeInfoTeamIdentifier as String] is String
+            == errSecSuccess
+        else { return nil }
+        return information as? [String: Any]
     }
 }

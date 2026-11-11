@@ -13,10 +13,14 @@ enum WallpaperSwitchHoldNotification {
     static let displayIDKey = "displayID"
     /// Why the layer was installed, one of `Reason`.
     static let reasonKey = "reason"
+    /// The preloaded wallpaper's id, a `String`; absent for other layer installs.
+    static let wallpaperIDKey = "wallpaperID"
 
     enum Reason: String {
         /// A window was just opened.
         case open
+        /// A background desktop's layer; pinning places it, and the switch hold ignores it.
+        case preload
         /// A scene replacement installed a fresh layer for its renderer.
         case replace
         /// A display reconfigure installed a fresh layer. A renderer with a picture keeps it; one
@@ -66,7 +70,7 @@ final class WallpaperSwitchHold {
     /// A requested still on its way, so `stop()` can end the wait.
     private struct Capture {
         let token: UInt64
-        let grab: PosterGrab
+        let grab: DesktopPosterGrab
     }
 
     private final class Ticket {
@@ -99,6 +103,7 @@ final class WallpaperSwitchHold {
     private let layers: @MainActor (UInt32) -> [CALayer]
     private let shouldHold: @MainActor (UInt32) -> Bool
     private let reduceMotion: @MainActor () -> Bool
+    private let concealed: @MainActor (UInt32) -> Bool
     private let sleep: @Sendable (Duration) async throws -> Void
     private let now: @MainActor () -> ContinuousClock.Instant
     private let configuration: Configuration
@@ -106,14 +111,18 @@ final class WallpaperSwitchHold {
     private var tickets: [UInt32: Ticket] = [:]
     private var captures: [UInt32: Capture] = [:]
     private var generation: UInt64 = 0
+    /// Called once a display's veil is gone, faded or not.
+    var onReleased: (@MainActor (UInt32) -> Void)?
 
     /// `layers` lists a display's live wallpaper content layers, the front one first;
     /// `shouldHold` says whether anyone can see the display (a suspended one is not held, and a
-    /// suspended surface may not answer the request); `reduceMotion` is the person's setting.
+    /// suspended surface may not answer the request); `reduceMotion` is the person's setting;
+    /// `concealed` says a display's windows are hidden, so its veil goes without a fade.
     init(center: NotificationCenter = .default,
          layers: @escaping @MainActor (UInt32) -> [CALayer],
          shouldHold: @escaping @MainActor (UInt32) -> Bool,
          reduceMotion: @escaping @MainActor () -> Bool,
+         concealed: @escaping @MainActor (UInt32) -> Bool = { _ in false },
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
          now: @escaping @MainActor () -> ContinuousClock.Instant = { ContinuousClock.now },
          configuration: Configuration = Configuration()) {
@@ -121,6 +130,7 @@ final class WallpaperSwitchHold {
         self.layers = layers
         self.shouldHold = shouldHold
         self.reduceMotion = reduceMotion
+        self.concealed = concealed
         self.sleep = sleep
         self.now = now
         self.configuration = configuration
@@ -130,6 +140,9 @@ final class WallpaperSwitchHold {
     var activeDisplayIDs: Set<UInt32> {
         Set(tickets.filter { $0.value.phase != .dismissing }.keys)
     }
+
+    /// Whether a still is being taken for the display or a veil still covers it.
+    func isHolding(_ display: UInt32) -> Bool { captures[display] != nil || tickets[display] != nil }
 
     func stateForTest(display: UInt32) -> Phase? {
         captures[display] != nil ? .capturing : tickets[display]?.phase
@@ -181,7 +194,7 @@ final class WallpaperSwitchHold {
             }
             guard shouldHold(display), let layer = layers(display).first else { continue }
             generation += 1
-            let capture = Capture(token: generation, grab: PosterGrab(center: center))
+            let capture = Capture(token: generation, grab: DesktopPosterGrab(center: center))
             captures[display] = capture
             requests.append((display, layer, capture))
         }
@@ -281,7 +294,10 @@ final class WallpaperSwitchHold {
     /// held picture goes.
     func cancel(displays: [UInt32]) {
         for display in displays {
-            if let capture = captures.removeValue(forKey: display) { capture.grab.cancel() }
+            if let capture = captures.removeValue(forKey: display) {
+                capture.grab.cancel()
+                if tickets[display] == nil { onReleased?(display) }
+            }
             dismiss(display, because: "cancelled")
         }
     }
@@ -295,11 +311,13 @@ final class WallpaperSwitchHold {
         captures[display] = nil
         guard !Task.isCancelled else { return }
         guard let frame else {
+            defer { onReleased?(display) }
             AppLog.warn("switch hold: display \(display) poster not delivered within "
                 + "\(configuration.grabTimeout.wholeMilliseconds) ms; not holding")
             return
         }
         guard let image = frame.cgImage() else {
+            defer { onReleased?(display) }
             AppLog.warn("switch hold: display \(display) poster frame \(frame.width)x\(frame.height) "
                 + "could not be used; not holding")
             return
@@ -320,6 +338,7 @@ final class WallpaperSwitchHold {
               let display = (values[WallpaperSwitchHoldNotification.displayIDKey] as? NSNumber)?.uint32Value,
               let reason = (values[WallpaperSwitchHoldNotification.reasonKey] as? String)
                 .flatMap(WallpaperSwitchHoldNotification.Reason.init(rawValue:)),
+              reason != .preload,
               let ticket = tickets[display], ticket.phase != .dismissing else { return }
         if reason == .reconfigure {
             // A renderer that is showing a picture keeps it through a reconfigure, so a veil
@@ -365,8 +384,8 @@ final class WallpaperSwitchHold {
         }
     }
 
-    /// Fades the veil out and forgets the display; at once when it is not on a window or the
-    /// person asked for less motion.
+    /// Fades the veil out and forgets the display; at once when it is not on a window, nobody
+    /// sees the window or the person asked for less motion.
     private func dismiss(_ display: UInt32, because reason: String) {
         guard let ticket = tickets[display], ticket.phase != .dismissing else { return }
         ticket.phase = .dismissing
@@ -375,7 +394,7 @@ final class WallpaperSwitchHold {
         let seconds = Double(ticket.heldAt.duration(to: now()).wholeMilliseconds) / 1_000
         AppLog.info("switch hold: display \(display) released after "
             + "\(String(format: "%.1f", seconds)) s (\(reason))")
-        guard ticket.veil.isAttached, configuration.fade > 0, !reduceMotion() else {
+        guard ticket.veil.isAttached, configuration.fade > 0, !reduceMotion(), !concealed(display) else {
             remove(display)
             return
         }
@@ -396,54 +415,6 @@ final class WallpaperSwitchHold {
         guard let ticket = tickets.removeValue(forKey: display) else { return }
         ticket.cancelTasks()
         ticket.veil.detach()
-    }
-}
-
-/// One request for a still and the wait for its answer.
-@MainActor
-private final class PosterGrab {
-    private let center: NotificationCenter
-    private var continuation: CheckedContinuation<DesktopPosterFrame?, Never>?
-    private var observer: NSObjectProtocol?
-    private var timeout: Task<Void, Never>?
-
-    init(center: NotificationCenter) { self.center = center }
-
-    /// Asks `layer`'s surface for a frame and waits for it, up to `timeout`. The first frame the
-    /// layer reports is taken whatever it was asked for: another request for the same layer (the
-    /// poster sync's) yields an equally fresh one, and the sync ignores a frame that carries
-    /// this request's context, so the still can never become the desktop poster. The listener
-    /// is in place before the request goes out, because an answer may come back inside it.
-    func run(on layer: CALayer, timeout: Duration,
-             sleep: @escaping @Sendable (Duration) async throws -> Void) async -> DesktopPosterFrame? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<DesktopPosterFrame?, Never>) in
-            self.continuation = continuation
-            observer = center.addObserver(
-                forName: DesktopPosterNotification.ready, object: layer, queue: .main
-            ) { [weak self] notification in
-                MainActor.assumeIsolated {
-                    if let frame = DesktopPosterFrame(userInfo: notification.userInfo) { self?.finish(frame) }
-                }
-            }
-            self.timeout = Task { [weak self] in
-                do { try await sleep(timeout) } catch { return }
-                self?.finish(nil)
-            }
-            center.post(name: DesktopPosterNotification.request, object: layer,
-                        userInfo: ["context": "switch-hold:" + UUID().uuidString])
-        }
-    }
-
-    /// Ends the wait with no frame.
-    func cancel() { finish(nil) }
-
-    private func finish(_ frame: DesktopPosterFrame?) {
-        guard let continuation else { return }
-        self.continuation = nil
-        if let observer { center.removeObserver(observer) }
-        observer = nil
-        timeout?.cancel()
-        timeout = nil
-        continuation.resume(returning: frame)
+        onReleased?(display)
     }
 }
