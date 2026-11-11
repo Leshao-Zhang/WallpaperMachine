@@ -466,8 +466,16 @@ analyzed without a build on Linux. Swift runs on `macos-26`: `prepare-build` and
 `python3 scripts/build.py --renderer-only` first, untraced, then CodeQL traces
 `scripts/build.py --swift-only` with the `--xcode-setting` overrides CodeQL's own
 Swift autobuild uses (no signing, no compilation cache, no integrated driver), so
-the extractor sees every Swift compile. C/C++ (only vendored third-party code is
-visible to it) and Ruby (only the FFmpeg formula) are deliberately not analyzed.
+the extractor sees every Swift compile. The same invocation also passes
+`ARCHS=arm64`, `EXCLUDED_ARCHS=x86_64` and `ONLY_ACTIVE_ARCH=NO`. CodeQL's tracer
+is an x86_64 process, so `$(NATIVE_ARCH_ACTUAL)` resolves to x86_64 there and the
+extension would link the arm64 renderer and Homebrew libraries as Intel;
+`ONLY_ACTIVE_ARCH` stays YES in the project, which would keep that slice unless
+this traced build turns it off. Those three settings are not passed by the
+release workflow or by a local build. `project.yml` still sets `ARCHS` to
+`$(NATIVE_ARCH_ACTUAL)`, so an Intel Mac still produces an x86_64 app. C/C++ (only
+vendored third-party code is visible to it) and Ruby (only the FFmpeg formula)
+are deliberately not analyzed.
 Default setup must stay off under **Settings -> Code security -> CodeQL
 analysis**; while it is on, GitHub rejects this workflow's results.
 

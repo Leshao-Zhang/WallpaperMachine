@@ -7,6 +7,11 @@
 # the trace, and CodeQL traces only the Xcode build. The settings it passes are the
 # ones CodeQL's own Swift autobuild uses: the extractor has to see every
 # swift-frontend call, which Xcode's integrated driver and compilation cache hide.
+# That tracer is an x86_64 process. Under it, project.yml's
+# ARCHS=$(NATIVE_ARCH_ACTUAL) resolves to x86_64, and the extension link fails
+# against the arm64 libwallpaper_bridge.a and Homebrew libraries built before
+# the trace. The traced build therefore forces arm64. Nothing else does:
+# project.yml and the release and Intel paths stay on the host architecture.
 #
 # The other languages need no build. C/C++ is left out on purpose: the only C/C++
 # CodeQL can see is vendored third-party code under upstream/renderer/external/,
@@ -70,12 +75,19 @@ jobs:
 
       - name: Build the app
         if: matrix.language == 'swift'
+        # ARCHS and EXCLUDED_ARCHS pin this one link to arm64. ONLY_ACTIVE_ARCH=NO
+        # is required as well: project.yml sets ONLY_ACTIVE_ARCH to YES, and the
+        # x86_64 tracer would otherwise keep building its own active architecture.
+        # scripts/build.py appends each --xcode-setting to this xcodebuild only.
         run: |
           python3 scripts/build.py --swift-only \
             --xcode-setting CODE_SIGNING_ALLOWED=NO \
             --xcode-setting COMPILATION_CACHE_ENABLE_CACHING=NO \
             --xcode-setting SWIFT_ENABLE_COMPILE_CACHE=NO \
-            --xcode-setting SWIFT_USE_INTEGRATED_DRIVER=NO
+            --xcode-setting SWIFT_USE_INTEGRATED_DRIVER=NO \
+            --xcode-setting ARCHS=arm64 \
+            --xcode-setting EXCLUDED_ARCHS=x86_64 \
+            --xcode-setting ONLY_ACTIVE_ARCH=NO
 
       - uses: github/codeql-action/analyze@v4
         with:
