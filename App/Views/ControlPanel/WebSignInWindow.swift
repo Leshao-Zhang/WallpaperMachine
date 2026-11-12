@@ -1,13 +1,16 @@
 import AppKit
 import WebKit
 
-/// A site whose own sign-in page `WebSignInWindowController` shows, and the one cookie the app
-/// takes from it once someone has signed in.
+/// A site whose own sign-in page `WebSignInWindowController` shows, and the cookies the app
+/// takes from it once someone has signed in: the session, and for Steam the token that renews it.
 struct WebSignInSite: Sendable {
     let title: String
     let signInURL: URL
     let cookieName: String
     let cookieDomains: Set<String>
+    /// A second cookie taken along with the session when the page set one, and where it lives.
+    var companionName: String?
+    var companionDomains: Set<String> = []
     /// Whether a cookie value is a real session rather than a placeholder the page sets early.
     let accepts: @Sendable (String) -> Bool
 
@@ -25,13 +28,14 @@ struct WebSignInSite: Sendable {
             title: String(localized: "Sign in to Steam"),
             signInURL: URL(string: "https://steamcommunity.com/login/home/?goto=")!,
             cookieName: "steamLoginSecure", cookieDomains: ["steamcommunity.com", ".steamcommunity.com"],
+            companionName: "steamRefresh_steam", companionDomains: ["login.steampowered.com"],
             accepts: { SteamWebSession(cookie: $0) != nil })
     }
 }
 
 /// A site's own sign-in page in a window of its own. The page runs in a private website data
-/// store that disappears with the window, and the app reads exactly one thing from it: the
-/// site's session cookie, once someone has signed in. The password, and anything else typed
+/// store that disappears with the window, and the app reads exactly what the site names from it:
+/// the session cookie, and its companion, once someone has signed in. The password, and anything else typed
 /// into the page, stays between the page and the site.
 @MainActor
 final class WebSignInWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate,
@@ -40,14 +44,30 @@ final class WebSignInWindowController: NSWindowController, NSWindowDelegate, WKN
     /// The open window of each site, by cookie name.
     private static var current: [String: WebSignInWindowController] = [:]
 
+    /// Runs after a sign-in window has closed, so the app can leave the Dock once no ordinary
+    /// window is left.
+    static var onClosed: (() -> Void)?
+
+    /// Whether `window` is an open sign-in window.
+    static func isOpen(_ window: NSWindow) -> Bool {
+        current.values.contains { $0.window === window }
+    }
+
     private let site: WebSignInSite
     private let webView: WKWebView
-    private var continuation: CheckedContinuation<String?, Never>?
+    /// Covers the blank page when the sign-in page could not load, with why and a way to retry.
+    private let failureView = WebSignInFailureView(frame: .zero)
+    private var continuation: CheckedContinuation<WebSignInCookies?, Never>?
 
-    /// Opens the window and answers the session cookie the site set, or nil once the window
-    /// closes without one. While the site's window is open, another call only brings it forward
-    /// and answers nil at once, so a caller must not start a second sign-in.
+    /// The session cookie alone, for a site without a companion.
     static func obtainCookie(for site: WebSignInSite) async -> String? {
+        await obtainCookies(for: site)?.session
+    }
+
+    /// Opens the window and answers the cookies the site set, or nil once the window closes
+    /// without a session. While the site's window is open, another call only brings it forward
+    /// and answers nil at once, so a caller must not start a second sign-in.
+    static func obtainCookies(for site: WebSignInSite) async -> WebSignInCookies? {
         if let open = current[site.cookieName] {
             open.showWindow(nil)
             return nil
@@ -81,21 +101,35 @@ final class WebSignInWindowController: NSWindowController, NSWindowDelegate, WKN
         window.title = site.title
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 380, height: 520)
-        window.contentView = webView
+        let content = NSView(frame: NSRect(origin: .zero, size: size))
+        for view in [webView, failureView] {
+            view.frame = content.bounds
+            view.autoresizingMask = [.width, .height]
+            content.addSubview(view)
+        }
+        failureView.isHidden = true
+        window.contentView = content
         ControlPanelWindow.moveToActiveSpace(window)
         window.center()
         super.init(window: window)
         window.delegate = self
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        failureView.retry = { [weak self] in self?.retry() }
         configuration.websiteDataStore.httpCookieStore.add(self)
+    }
+
+    /// Starts the site's sign-in page again, from its first address.
+    private func retry() {
+        failureView.isHidden = true
+        webView.load(URLRequest(url: site.signInURL))
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
     /// Answers the waiting caller once, then closes the window and lets the page's data go.
-    private func finish(_ session: String?) {
+    private func finish(_ session: WebSignInCookies?) {
         guard let continuation else { return }
         self.continuation = nil
         if Self.current[site.cookieName] === self { Self.current[site.cookieName] = nil }
@@ -103,6 +137,7 @@ final class WebSignInWindowController: NSWindowController, NSWindowDelegate, WKN
         webView.stopLoading()
         window?.delegate = nil
         close()
+        Self.onClosed?()
         continuation.resume(returning: session)
     }
 
@@ -113,7 +148,11 @@ final class WebSignInWindowController: NSWindowController, NSWindowDelegate, WKN
                 $0.name == site.cookieName && site.cookieDomains.contains($0.domain) && site.accepts($0.value)
             })?.value
         else { return }
-        finish(session)
+        // Steam sets its renewal cookie before the session, so both are in the same snapshot.
+        let companion = site.companionName.flatMap { name in
+            cookies.first { $0.name == name && site.companionDomains.contains($0.domain) }?.value
+        }
+        finish(WebSignInCookies(session: session, companion: companion))
     }
 
     nonisolated func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
@@ -142,7 +181,7 @@ final class WebSignInWindowController: NSWindowController, NSWindowDelegate, WKN
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        window?.subtitle = ""
+        failureView.isHidden = true
         Task { await lookForSession() }
     }
 
@@ -157,10 +196,79 @@ final class WebSignInWindowController: NSWindowController, NSWindowDelegate, WKN
     }
 
     /// A load the page itself replaced, or one refused above, is not a failure worth showing.
+    /// Anything else covers the page, which WebKit leaves blank, with the reason and a retry.
     private func showFailure(_ error: Error) {
-        let error = error as NSError
-        if error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled { return }
-        if error.domain == "WebKitErrorDomain", error.code == 102 { return }
-        window?.subtitle = error.localizedDescription
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return }
+        if nsError.domain == "WebKitErrorDomain", nsError.code == 102 { return }
+        failureView.message = ConnectionInterrupted.message(for: error, site: site.signInURL.host ?? site.title)
+        failureView.isHidden = false
     }
+}
+
+/// What a sign-in window shows in place of a page that did not load: a heading, the reason and
+/// **Retry**.
+@MainActor
+private final class WebSignInFailureView: NSView {
+    var retry: (() -> Void)?
+
+    var message: String {
+        get { detail.stringValue }
+        set { detail.stringValue = newValue }
+    }
+
+    private let detail = NSTextField(wrappingLabelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+
+        let symbol = NSImageView(
+            image: NSImage(systemSymbolName: "wifi.exclamationmark", accessibilityDescription: nil) ?? NSImage())
+        symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 32, weight: .regular)
+        symbol.contentTintColor = .secondaryLabelColor
+
+        let heading = NSTextField(labelWithString: String(localized: "Couldn’t open the sign-in page"))
+        heading.font = .boldSystemFont(ofSize: NSFont.systemFontSize + 2)
+        heading.alignment = .center
+
+        detail.alignment = .center
+        detail.textColor = .secondaryLabelColor
+        detail.isSelectable = true
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let button = NSButton(title: String(localized: "Retry"), target: self, action: #selector(retryPressed))
+        button.bezelStyle = .push
+
+        let stack = NSStackView(views: [symbol, heading, detail, button])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 12
+        stack.setCustomSpacing(20, after: detail)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        // The reason wraps at 360 points, or narrower when the window is.
+        let preferredWidth = detail.widthAnchor.constraint(equalToConstant: 360)
+        preferredWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 32),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -32),
+            preferredWidth,
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    // The page behind is hidden only by this view, so it paints the window's background,
+    // resolved again whenever the appearance changes.
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    }
+
+    @objc private func retryPressed() { retry?() }
 }

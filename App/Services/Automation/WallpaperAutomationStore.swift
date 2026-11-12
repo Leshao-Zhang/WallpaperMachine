@@ -28,17 +28,25 @@ struct FocusWallpaperRestore: Codable, Equatable, Sendable {
 @MainActor
 final class WallpaperAutomationStore {
     static let shared = WallpaperAutomationStore()
-    static let configurationsKey = "WallpaperMachine.automaticWallpapers"
-    static let locationKey = "WallpaperMachine.solarLocation"
-    static let handledKey = "WallpaperMachine.automaticWallpaperHandled"
-    static let focusRestoreKey = "WallpaperMachine.focusWallpaperRestore"
+    nonisolated static let configurationsKey = "WallpaperMachine.automaticWallpapers"
+    nonisolated static let locationKey = "WallpaperMachine.solarLocation"
+    nonisolated static let solarKey = "WallpaperMachine.solarSettings"
+    nonisolated static let handledKey = "WallpaperMachine.automaticWallpaperHandled"
+    nonisolated static let focusRestoreKey = "WallpaperMachine.focusWallpaperRestore"
     static let didChangeNotification = Notification.Name("WallpaperMachine.automationSettingsChanged")
     static let statusChangedNotification = Notification.Name("WallpaperMachine.automationStatusChanged")
     private let defaults: UserDefaults
     private(set) var configurations: [String: DisplayWallpaperAutomation]
-    private(set) var location: WallpaperSolarLocation?
+    private(set) var solar: WallpaperSolarSettings
+    /// The coordinates the sunset and sunrise rules plan with, whatever their source.
+    var location: WallpaperSolarLocation? { solar.location }
     private(set) var handled: [String: String]
     private(set) var focusRestore: [String: FocusWallpaperRestore]
+    /// Displays whose saved rules, or Focus recovery record, this build could not read (a newer
+    /// build's, or damaged), as they were saved. Every save writes them back unchanged, so
+    /// editing one display never erases another's; giving such a display new rules replaces it.
+    private var unreadConfigurations: [String: Data] = [:]
+    private var unreadFocusRestore: [String: Data] = [:]
     private(set) var loadError: String?
     private(set) var errors: [String: String] = [:]
     private(set) var next: [String: WallpaperAutomationOccurrence] = [:]
@@ -56,18 +64,47 @@ final class WallpaperAutomationStore {
             }
             return value
         }
-        let stored = read(Self.configurationsKey, [String: DisplayWallpaperAutomation].self, fallback: [:])
-        configurations = stored.count <= 64 ? stored.filter { Self.validDisplay($0.key) && $0.value.isValid } : [:]
-        if configurations.count != stored.count { failed = true }
-        if let data = defaults.data(forKey: Self.locationKey) {
-            let value = try? JSONDecoder().decode(WallpaperSolarLocation.self, from: data)
-            location = value?.isValid == true ? value : nil
-            failed = failed || location == nil
+        // One display's record this build cannot read must not take the other displays' with it.
+        func readKeyed<T: Decodable>(_ key: String, _ type: T.Type, accepts: (String, T) -> Bool)
+            -> (values: [String: T], unread: [String: Data]) {
+            guard let data = defaults.data(forKey: key) else { return ([:], [:]) }
+            guard data.count <= 2 * 1024 * 1024,
+                  let stored = PreservedJSON.readObject(data, as: type, accepts: accepts),
+                  stored.values.count + stored.unread.count <= Self.displayLimit else {
+                failed = true
+                return ([:], [:])
+            }
+            if !stored.unread.isEmpty { failed = true }
+            return stored
+        }
+        let stored = readKeyed(Self.configurationsKey, DisplayWallpaperAutomation.self) {
+            Self.validDisplay($0) && $1.isValid
+        }
+        configurations = stored.values
+        unreadConfigurations = stored.unread
+        if let data = defaults.data(forKey: Self.solarKey),
+           let stored = try? JSONDecoder().decode(WallpaperSolarSettings.self, from: data),
+           stored.isValid {
+            solar = stored
+        } else {
+            if defaults.data(forKey: Self.solarKey) != nil { failed = true }
+            // Settings written before the source existed hold a bare location; read it as the
+            // coordinates source so an upgrade keeps the user's position. Only the fallback
+            // reads it: a corrupt legacy value must not fail a working settings record.
+            let legacyLocation: WallpaperSolarLocation? = defaults.data(forKey: Self.locationKey).flatMap {
+                guard let value = try? JSONDecoder().decode(WallpaperSolarLocation.self, from: $0),
+                      value.isValid else { failed = true; return nil }
+                return value
+            }
+            solar = WallpaperSolarSettings(location: legacyLocation)
         }
         handled = read(Self.handledKey, [String: String].self, fallback: [:])
             .filter { Self.validDisplay($0.key) && $0.value.count <= 4096 }
-        focusRestore = read(Self.focusRestoreKey, [String: FocusWallpaperRestore].self, fallback: [:])
-            .filter { Self.validDisplay($0.key) && $0.value.key.count <= 4096 }
+        let restores = readKeyed(Self.focusRestoreKey, FocusWallpaperRestore.self) {
+            Self.validDisplay($0) && $1.key.count <= 4096
+        }
+        focusRestore = restores.values
+        unreadFocusRestore = restores.unread
         if failed {
             loadError = String(localized: "Some automatic wallpaper settings could not be read. Check your rules and Focus choices before using them.")
             AppLog.warn("automatic wallpaper preferences could not be fully decoded")
@@ -77,7 +114,11 @@ final class WallpaperAutomationStore {
     func configuration(for display: String) -> DisplayWallpaperAutomation { configurations[display] ?? .init() }
 
     func update(_ display: String, _ change: (inout DisplayWallpaperAutomation) throws -> Void) throws {
-        guard Self.validDisplay(display), configurations[display] != nil || configurations.count < 64 else { throw Self.invalid() }
+        // A display whose record could not be read still holds one of the places.
+        let held = configurations.count + unreadConfigurations.count
+        guard Self.validDisplay(display),
+              configurations[display] != nil || unreadConfigurations[display] != nil || held < Self.displayLimit
+        else { throw Self.invalid() }
         let before = configuration(for: display)
         var value = before
         try change(&value)
@@ -86,10 +127,13 @@ final class WallpaperAutomationStore {
         value.revision = before.revision &+ 1
         var updated = configurations
         updated[display] = value
-        let data = try JSONEncoder().encode(updated)
+        let data = try PreservedJSON.writeObject(updated, keeping: unreadConfigurations)
         configurations = updated
+        // The display has rules this build wrote now; what it could not read there is replaced.
+        unreadConfigurations[display] = nil
         defaults.set(data, forKey: Self.configurationsKey)
-        loadError = nil
+        // The warning stands while a display's rules are still set aside unread.
+        if unreadConfigurations.isEmpty && unreadFocusRestore.isEmpty { loadError = nil }
         changed()
     }
 
@@ -107,10 +151,23 @@ final class WallpaperAutomationStore {
 
     func setLocation(_ value: WallpaperSolarLocation?) throws {
         guard value?.isValid != false else { throw Self.invalid() }
-        guard location != value else { return }
-        if let value { defaults.set(try JSONEncoder().encode(value), forKey: Self.locationKey) }
-        else { defaults.removeObject(forKey: Self.locationKey) }
-        location = value
+        guard solar.location != value else { return }
+        var updated = solar
+        updated.location = value
+        try setSolar(updated)
+    }
+
+    func setSolar(_ value: WallpaperSolarSettings) throws {
+        guard value.isValid else { throw Self.invalid() }
+        guard solar != value else { return }
+        defaults.set(try JSONEncoder().encode(value), forKey: Self.solarKey)
+        // Keep the pre-source key in step so backups and older builds still find a location.
+        if let location = value.location {
+            defaults.set(try JSONEncoder().encode(location), forKey: Self.locationKey)
+        } else {
+            defaults.removeObject(forKey: Self.locationKey)
+        }
+        solar = value
         changed()
     }
 
@@ -138,8 +195,9 @@ final class WallpaperAutomationStore {
     func rememberFocus(_ record: FocusWallpaperRestore, on display: String) throws {
         var updated = focusRestore
         updated[display] = record
-        let data = try JSONEncoder().encode(updated)
+        let data = try PreservedJSON.writeObject(updated, keeping: unreadFocusRestore)
         focusRestore = updated
+        unreadFocusRestore[display] = nil
         defaults.set(data, forKey: Self.focusRestoreKey)
         statusChanged()
     }
@@ -148,7 +206,7 @@ final class WallpaperAutomationStore {
         guard focusRestore[display] != nil else { return }
         var updated = focusRestore
         updated[display] = nil
-        let data = try JSONEncoder().encode(updated)
+        let data = try PreservedJSON.writeObject(updated, keeping: unreadFocusRestore)
         focusRestore = updated
         defaults.set(data, forKey: Self.focusRestoreKey)
         statusChanged()
@@ -181,7 +239,7 @@ final class WallpaperAutomationStore {
             if updated[display]?.expectedPlaylist.planID == id { updated[display]?.expectedPlaylist.planID = nil }
         }
         guard updated != focusRestore else { return }
-        let data = try JSONEncoder().encode(updated)
+        let data = try PreservedJSON.writeObject(updated, keeping: unreadFocusRestore)
         focusRestore = updated
         defaults.set(data, forKey: Self.focusRestoreKey)
         statusChanged()
@@ -190,9 +248,11 @@ final class WallpaperAutomationStore {
     nonisolated static func validateConfigurations(_ data: Data) throws {
         guard data.count <= 2 * 1024 * 1024 else { throw invalid() }
         let records = try JSONDecoder().decode([String: DisplayWallpaperAutomation].self, from: data)
-        guard records.count <= 64, records.allSatisfy({ validDisplay($0.key) && $0.value.isValid }) else { throw invalid() }
+        guard records.count <= displayLimit, records.allSatisfy({ validDisplay($0.key) && $0.value.isValid }) else { throw invalid() }
     }
 
+    /// The most displays the store keeps rules for, the unread ones among them.
+    nonisolated private static let displayLimit = 64
     nonisolated private static func validDisplay(_ id: String) -> Bool { !id.isEmpty && id.count <= 2048 && !id.contains("\0") }
     nonisolated private static func invalid() -> AutomationError {
         AutomationError(message: String(localized: "Choose a valid display, time, weekday and wallpaper or saved playlist."))

@@ -3,27 +3,44 @@
 #
 # Called by Version right after it pushes a bump tag, and by Release for hand-pushed
 # tags. Version has to call it directly: a tag pushed with GITHUB_TOKEN never starts
-# another workflow, so Release alone would never run for CI-produced tags.
+# another workflow, so Release alone would never run for CI-produced tags. Rehearsal
+# calls it with `rehearsal: true`, which builds a branch as the version `tag` names and
+# signs, notarizes and verifies its image, without a tag, notes or publication.
 #
-# Four jobs. `app-icon` compiles the Icon Composer icon on macOS 26, because Xcode 26's
-# actool crashes on most attempts to compile an .icon on macOS 15. `build` makes the
-# Release image on macOS 15 with that icon, while `test` runs the gate on macOS 26, so
-# the gate costs no time on top of the Release build; `publish` needs both, so a binary
-# is only ever published after the gate a change has to pass. The release is created as a draft
-# and published only after the disk image it needs is uploaded, so the in-app updater
-# never sees a "latest" release with nothing to download. Everything published is
-# derived from the build or recorded at the tag: the notes from the tag's bilingual
-# CHANGELOG.md section (generated once into that file when the tag has none), the
-# checksum and the update manifest from the image, the provenance attestation from
-# this run.
+# `app-icon` compiles the Icon Composer icon on macOS 26, because Xcode 26's actool
+# crashes on most attempts to compile an .icon on macOS 15. `notes` writes the release
+# body once. `build` then makes two native Release images, arm64 on macos-15 and x86_64
+# on macos-15-intel, and starts beside `app-icon`: it compiles the app without the icon
+# and adds it once compiled, by which time the icon is long done, so the icon job is
+# not part of a release's time. The project builds the runner's own CPU
+# (`ARCHS=$(NATIVE_ARCH_ACTUAL)`), so the Intel image is not a cross-compile. `publish`
+# releases both images. The test gate is not part of a release: every change passes
+# `python3 scripts/test.py` before it is committed, and on hosted VMs the gate failed
+# only on timing and layout the VM got wrong, unpublishing five 1.5 tags in a row; Test
+# runs it by hand. The release is created as a draft and published only after both disk
+# images it needs are uploaded, so the in-app updater never sees a "latest" release with
+# nothing to download. Everything published is derived from the build or recorded at the
+# tag: the notes from the tag's translated CHANGELOG.md section (generated once into that
+# file when the tag has none), the checksums and the update manifest from both images
+# and that CHANGELOG.md, the provenance attestation from this run.
 name: Build
 
 on:
   workflow_call:
     inputs:
       tag:
-        description: "Version tag to build and publish."
+        description: "Version tag to build and publish (in a rehearsal, the version to build as)."
         required: true
+        type: string
+      rehearsal:
+        description: "Build, sign, notarize and verify `ref` as `tag`, and publish nothing."
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: "What a rehearsal builds; a release always builds its tag."
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -31,6 +48,8 @@ permissions:
 
 jobs:
   app-icon:
+    # `build` waits for this job by its name (step "Wait for the app icon").
+    name: App icon (macOS 26)
     # A few seconds of actool, but it has to be macOS 26: on macOS 15, Xcode 26's actool
     # (every 26.x on the runner image) exits 255 on most .icon compiles. The asset
     # catalog alone compiles there reliably, so `build` still compiles that itself.
@@ -39,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.rehearsal && inputs.ref || inputs.tag }}
 
       - name: Compile the app icon
         run: |
@@ -56,106 +75,246 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build:
-    needs: app-icon
-    # The oldest runner that carries Xcode 26. Homebrew pours bottles built for the
-    # runner's own release, and the app bundles those dylibs, so the runner's macOS
-    # is the lowest release the published app can launch on (docs/build.md).
-    runs-on: macos-15
-    timeout-minutes: 150
+  notes:
+    # Once, before either architecture builds, so both apps bundle the same changelog
+    # and the model is asked at most once. A rehearsal publishes nothing and keeps the
+    # changelog the version bump writes.
+    if: ${{ !inputs.rehearsal }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag }}
-          # Release notes read the commits between this tag and the previous one.
           fetch-depth: 0
 
       - name: Write the release notes
-        # Before the long build, so a notes problem fails in seconds. A bilingual
-        # CHANGELOG.md section is reused. A hand-pushed tag without one asks the model
-        # once and writes that exact section into the working tree before the build
-        # bundles both languages. GitHub uses only the English notes and compare link.
-        # English-only source history fails.
         env:
           TAG: ${{ inputs.tag }}
           RELEASE_NOTES_API_KEY: ${{ secrets.RELEASE_NOTES_API_KEY }}
+          RELEASE_NOTES_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/release"
           python3 scripts/release_notes.py --tag "$TAG" --release-body --ai \
             --built-from "$(git rev-parse HEAD)" --output "${RUNNER_TEMP}/release/notes.md"
+          cp CHANGELOG.md "${RUNNER_TEMP}/release/CHANGELOG.md"
           cat "${RUNNER_TEMP}/release/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ inputs.tag }}-notes
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Build, sign and notarize (${{ matrix.arch }})
+    needs: notes
+    # A skipped notes job is a rehearsal. A failed one must not build.
+    if: ${{ always() && (needs.notes.result == 'success' || needs.notes.result == 'skipped') }}
+    # Not `needs: app-icon`: the icon is only needed once the app is compiled.
+    # macos-15 is the oldest runner that carries Xcode 26. Homebrew pours bottles
+    # built for the runner's own release, and the app bundles those dylibs, so that
+    # macOS is the lowest release the published app can launch on (docs/build.md).
+    # macos-15-intel is the same OS generation on x86_64.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      # Reads this run's jobs and artifacts while it waits for the app icon.
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rehearsal && inputs.ref || inputs.tag }}
+          # Release notes read the commits between this tag and the previous one.
+          fetch-depth: 0
+
+      - name: Build as the rehearsed version
+        if: inputs.rehearsal
+        # The tree as the bump commit would leave it: what a release of this ref builds.
+        env:
+          TAG: ${{ inputs.tag }}
+        run: python3 scripts/bump_version.py --spec "${TAG#v}" --apply
+
+      - uses: actions/download-artifact@v4
+        if: ${{ !inputs.rehearsal }}
+        with:
+          name: release-${{ inputs.tag }}-notes
+          path: ${{ runner.temp }}/notes
+
+      - name: Bundle the shared changelog
+        if: ${{ !inputs.rehearsal }}
+        run: cp "${RUNNER_TEMP}/notes/CHANGELOG.md" CHANGELOG.md
+
+      - name: Import the Developer ID certificate and the notary credentials
+        # Before the long build, so a missing secret or a key Apple refuses fails in a
+        # minute rather than after it, as 1.9.0's did. Xcode signs ad hoc
+        # (CODE_SIGN_IDENTITY "-"), so the identity in the keychain changes nothing there.
+        # Releases are signed with the project's Developer ID and notarized, so a downloaded
+        # copy opens without Open Anyway, and their designated requirement (identifier,
+        # Apple's Developer ID chain, team) is the same from one release to the next, so
+        # macOS keeps the app's privacy permissions after an in-app update
+        # (docs/build.md#release-signing). A missing secret fails here instead of shipping
+        # a build Gatekeeper holds or that drops those permissions.
+        env:
+          DEVELOPER_ID_CERTIFICATE_P12: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
+          DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in DEVELOPER_ID_CERTIFICATE_P12 DEVELOPER_ID_CERTIFICATE_PASSWORD NOTARY_API_KEY NOTARY_API_KEY_ID NOTARY_API_ISSUER; do
+            if [ -z "${!name}" ]; then missing="${missing} ${name}"; fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing repository secrets:${missing} (docs/build.md#release-signing)."
+            exit 1
+          fi
+          keychain="${RUNNER_TEMP}/signing.keychain-db"
+          certificate="${RUNNER_TEMP}/signing.p12"
+          key="${RUNNER_TEMP}/notary-key.p8"
+          password="$(openssl rand -hex 24)"
+          printf '%s' "${DEVELOPER_ID_CERTIFICATE_P12}" | base64 -d > "${certificate}"
+          security create-keychain -p "${password}" "${keychain}"
+          security set-keychain-settings -lut 21600 "${keychain}"
+          security unlock-keychain -p "${password}" "${keychain}"
+          security import "${certificate}" -k "${keychain}" -P "${DEVELOPER_ID_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          rm -f "${certificate}"
+          # Apple's Developer ID intermediates, so codesign can build the chain whichever
+          # one issued the certificate; the runner image does not promise either. A .p12
+          # exported from Keychain Access usually carries its issuer already, and
+          # `security import` fails on a certificate the keychain holds: that one is skipped.
+          for intermediate in DeveloperIDCA DeveloperIDG2CA; do
+            curl -fsSL --retry 3 "https://www.apple.com/certificateauthority/${intermediate}.cer" -o "${RUNNER_TEMP}/${intermediate}.cer"
+            if output="$(security import "${RUNNER_TEMP}/${intermediate}.cer" -k "${keychain}" 2>&1)"; then
+              echo "${output}"
+            else
+              case "${output}" in
+                *"already exists"*) echo "${intermediate}: already in the keychain" ;;
+                *) echo "${output}" >&2; exit 1 ;;
+              esac
+            fi
+          done
+          # Lets codesign use the key without a keychain prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${password}" "${keychain}" > /dev/null
+          # shellcheck disable=SC2046 # keychain paths carry no spaces on the runner
+          security list-keychains -d user -s "${keychain}" $(security list-keychains -d user | tr -d '"')
+          # The App Store Connect API key becomes a notarytool profile in the same temporary
+          # keychain; storing it also checks it with Apple, so a wrong key fails here.
+          printf '%s\n' "${NOTARY_API_KEY}" > "${key}"
+          xcrun notarytool store-credentials "WallpaperMachine Notary" --key "${key}" \
+            --key-id "${NOTARY_API_KEY_ID}" --issuer "${NOTARY_API_ISSUER}" --keychain "${keychain}"
+          rm -f "${key}"
+
       - uses: ./.github/actions/prepare-build
+        with:
+          # Restore only: an upload here would hold up the release. Warm caches saves
+          # them every day, and the renderer build is reused for every source this
+          # release has not changed since.
+          save-object-cache: "false"
+          reuse-renderer-build: "true"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          python3 scripts/build.py --configuration Release --no-app-icon
+
+      - name: Wait for the app icon
+        # The icon job started with this one and needs about a minute against this job's
+        # ten, so its artifact is normally there already. It is looked up by name, which
+        # also finds the artifact of an earlier attempt when only this job is re-run; an
+        # icon job that ended without one fails this job. The timeout also bounds a hung
+        # lookup, which the loop's own count of sleeps cannot.
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: app-icon-${{ inputs.tag }}
+          ICON_JOB: App icon (macOS 26)
+        run: |
+          set -euo pipefail
+          artifacts="repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${ARTIFACT}"
+          jobs="repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100"
+          for _ in $(seq 1 180); do
+            # A failed lookup counts as not yet, and is asked again. Only gh's exit status
+            # says so: on an HTTP error it prints the error body, not the --jq result.
+            if count="$(gh api "${artifacts}" --jq '.total_count')" && [ "${count}" -gt 0 ]; then
+              echo "${ARTIFACT} is ready."
+              exit 0
+            fi
+            if conclusion="$(gh api "${jobs}" --jq "[.jobs[] | select(.name | endswith(\"${ICON_JOB}\")) | .conclusion // empty] | last // empty")" \
+                && [ -n "${conclusion}" ] && [ "${conclusion}" != success ]; then
+              echo "::error::The ${ICON_JOB} job ended ${conclusion}, so there is no icon to build with."
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::${ARTIFACT} did not appear within 30 minutes."
+          exit 1
 
       - uses: actions/download-artifact@v4
         with:
           name: app-icon-${{ inputs.tag }}
           path: ${{ runner.temp }}/app-icon
 
-      - name: Build
-        run: |
-          set -euo pipefail
-          xcodebuild -version
-          python3 scripts/build.py --configuration Release --app-icon "${RUNNER_TEMP}/app-icon"
-
-      - name: Import the signing certificate
-        # The project certificate, not ad hoc, keeps the app's designated requirement the
-        # same from one release to the next, so macOS keeps its privacy permissions after an
-        # in-app update (docs/build.md). A missing secret fails here instead of shipping an
-        # ad-hoc build that would drop those permissions again.
-        env:
-          SIGNING_CERTIFICATE_P12: ${{ secrets.SIGNING_CERTIFICATE_P12 }}
-          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SIGNING_CERTIFICATE_P12}" ] || [ -z "${SIGNING_CERTIFICATE_PASSWORD}" ]; then
-            echo "::error::SIGNING_CERTIFICATE_P12 and SIGNING_CERTIFICATE_PASSWORD must be set (docs/build.md#release-signing)."
-            exit 1
-          fi
-          keychain="${RUNNER_TEMP}/signing.keychain-db"
-          certificate="${RUNNER_TEMP}/signing.p12"
-          password="$(openssl rand -hex 24)"
-          printf '%s' "${SIGNING_CERTIFICATE_P12}" | base64 -d > "${certificate}"
-          security create-keychain -p "${password}" "${keychain}"
-          security set-keychain-settings -lut 21600 "${keychain}"
-          security unlock-keychain -p "${password}" "${keychain}"
-          security import "${certificate}" -k "${keychain}" -P "${SIGNING_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
-          rm -f "${certificate}"
-          # Lets codesign use the key without a keychain prompt.
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${password}" "${keychain}" > /dev/null
-          # shellcheck disable=SC2046 # keychain paths carry no spaces on the runner
-          security list-keychains -d user -s "${keychain}" $(security list-keychains -d user | tr -d '"')
+      - name: Add the app icon
+        run: python3 scripts/build.py --configuration Release --install-app-icon "${RUNNER_TEMP}/app-icon"
 
       - name: Package
-        # Relocates and signs the bundle with the project certificate, wraps it in the
-        # drag-to-install disk image, mounts that image to check the app's identifier,
-        # version, signature and the Applications link, and writes the .sha256 sidecar
-        # (docs/build.md).
+        # Relocates the bundle and signs it with the Developer ID and the hardened runtime,
+        # has Apple notarize the app and staples the ticket to it, wraps it in the
+        # drag-to-install disk image, signs, notarizes and staples the image, mounts it to
+        # check the app's identifier, version, signature, ticket and the Applications link,
+        # and only then writes the .sha256 sidecar (docs/build.md).
         run: |
           python3 scripts/package.py --configuration Release --require-deployment-target \
-            --sign-identity "WallpaperMachine Code Signing"
+            --sign-identity "Developer ID Application" \
+            --notarize "WallpaperMachine Notary" --notary-keychain "${RUNNER_TEMP}/signing.keychain-db"
 
       - name: Match the disk image to the tag
         env:
           TAG: ${{ inputs.tag }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           directory="build/Build/Products/Release"
-          case "$(uname -m)" in
-            arm64) arch=arm64 ;;
-            x86_64) arch=x86_64 ;;
-            *) echo "::error::Publish from an Apple silicon or Intel Mac, not $(uname -m)."; exit 1 ;;
-          esac
-          name="WallpaperMachine-${TAG#v}-${arch}.dmg"
+          app="${directory}/WallpaperMachine.app/Contents/MacOS/WallpaperMachine"
+          extension="${directory}/WallpaperMachine.app/Contents/Extensions/WallpaperMachineExtension.appex/Contents/MacOS/WallpaperMachineExtension"
+          if [ "$(uname -m)" != "${ARCH}" ]; then
+            echo "::error::This runner is $(uname -m), not ${ARCH}."
+            exit 1
+          fi
+          for binary in "${app}" "${extension}"; do
+            slices="$(lipo -archs "${binary}")"
+            if [ "${slices}" != "${ARCH}" ]; then
+              echo "::error::${binary} is ${slices}, not ${ARCH}."
+              exit 1
+            fi
+          done
+          name="WallpaperMachine-${TAG#v}-${ARCH}.dmg"
+          mkdir -p "${RUNNER_TEMP}/release"
           if [ ! -f "${directory}/${name}" ]; then
             echo "::error::No ${name} in ${directory}. scripts/package.py names the image from the built bundle's CFBundleShortVersionString, so the version bump never reached this build."
             ls -1 "${directory}"/*.dmg 2>/dev/null || true
             exit 1
           fi
-          cp "${directory}/${name}" "${directory}/${name}.sha256" "${RUNNER_TEMP}/release/"
+          cp "${directory}/${name}" "${directory}/${name}.sha256" "${directory}/${name}.metadata.json" "${RUNNER_TEMP}/release/"
           {
             echo "### \`${name}\`"
+            echo ""
+            echo "Binary slices: \`${ARCH}\` on \`$(uname -m)\`."
             echo ""
             echo '```'
             cat "${directory}/${name}.sha256"
@@ -172,88 +331,26 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-${{ inputs.tag }}
+          name: build-logs-${{ inputs.tag }}-${{ matrix.arch }}
           path: artifacts/build/
           if-no-files-found: ignore
           retention-days: 14
 
       - name: Hand the image to publish
+        # A rehearsal's image is kept for a few days to try out, and published nowhere.
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ inputs.tag }}
+          name: ${{ inputs.rehearsal && 'rehearsal' || 'release' }}-${{ inputs.tag }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/release/
           if-no-files-found: error
           # A disk image is already compressed.
           compression-level: 0
-          retention-days: 7
-
-  test:
-    # The same gate `python3 scripts/test.py` is locally. It needs the renderer and the
-    # generated bridge, not the Release app, so it builds only those and then the Debug
-    # app and tests, on its own runner while `build` produces the Release image. macOS
-    # 26, where actool compiles the app icon the Debug app carries.
-    runs-on: macos-26
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag }}
-          # scripts/tests read the history the way the release scripts do.
-          fetch-depth: 0
-
-      - uses: ./.github/actions/prepare-build
-
-      - name: Build the renderer and bridge
-        run: python3 scripts/build.py --renderer-only
-
-      - name: Rust release checks
-        run: python3 scripts/check_rust.py
-
-      - name: Renderer regressions without a desktop
-        # Standard hosted Macs may have no Metal device. Only the separate
-        # capability probe's explicit exit 77 may skip GPU targets; started
-        # tests still fail on compile/parse/draw errors and timeouts. Hosted
-        # VMs deliver 10 ms waits 50-100 ms late; only the timer probe's exit
-        # 77 may skip the named wall-clock cadence tests.
-        run: python3 scripts/check_renderer.py --allow-missing-gpu --allow-imprecise-timers
-
-      - name: Test
-        # One test class at a time. In parallel, offscreen control-panel suites failed here
-        # (never locally) with "InvalidTransition … failed(deinit)": WebKit dropped a
-        # JavaScript call unanswered. Here serial costs almost nothing: 300 s for the 1.2.0
-        # gate against 278 s in parallel (locally it is 220 s against 50 s).
-        run: python3 scripts/test.py --serial
-
-      - name: Report the C++ object cache
-        if: always()
-        run: ccache --show-stats
-
-      - name: Collect crash and jetsam reports of a failed test run
-        # Says whether a web content process crashed or was killed for memory.
-        if: failure()
-        run: |
-          mkdir -p artifacts/tests/reports
-          find ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports -maxdepth 1 -type f \
-            \( -name '*WebContent*' -o -name '*WebKit*' -o -name 'WallpaperMachine*' -o -name 'JetsamEvent*' \) \
-            -mmin -180 -exec cp {} artifacts/tests/reports/ \; 2>/dev/null || true
-          ls -l artifacts/tests/reports
-
-      - name: Keep the logs of a failed test run
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-logs-${{ inputs.tag }}
-          path: |
-            artifacts/build/
-            artifacts/rust/
-            artifacts/renderer/adaptive-*/
-            artifacts/tests/*.log
-            artifacts/tests/reports/
-          if-no-files-found: ignore
-          retention-days: 14
+          retention-days: ${{ inputs.rehearsal && 3 || 7 }}
 
   publish:
-    needs: [build, test]
+    name: Publish the release
+    needs: build
+    if: ${{ !inputs.rehearsal && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Builds remain per-tag and parallel; publication is repository-wide so the
@@ -276,64 +373,77 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: release-${{ inputs.tag }}
+          pattern: release-${{ inputs.tag }}-*
           path: ${{ runner.temp }}/release
+          merge-multiple: true
 
-      - name: Locate the image
-        id: image
+      - name: Check both disk images
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          case "$(uname -m)" in
-            arm64) arch=arm64 ;;
-            x86_64) arch=x86_64 ;;
-            *) echo "::error::Publish from an Apple silicon or Intel Mac, not $(uname -m)."; exit 1 ;;
-          esac
-          name="WallpaperMachine-${TAG#v}-${arch}.dmg"
-          {
-            echo "image=${RUNNER_TEMP}/release/${name}"
-            echo "checksum=${RUNNER_TEMP}/release/${name}.sha256"
-          } >> "$GITHUB_OUTPUT"
-          # The sidecar was written on the build runner; the image must still match it.
-          (cd "${RUNNER_TEMP}/release" && sha256sum -c "${name}.sha256")
+          version="${TAG#v}"
+          directory="${RUNNER_TEMP}/release"
+          for arch in arm64 x86_64; do
+            name="WallpaperMachine-${version}-${arch}.dmg"
+            if [ ! -f "${directory}/${name}" ] || [ ! -f "${directory}/${name}.metadata.json" ]; then
+              echo "::error::No ${name} and its metadata in the release artifacts."
+              ls -1 "${directory}" || true
+              exit 1
+            fi
+            (cd "${directory}" && sha256sum -c "${name}.sha256")
+            echo "### \`${name}\`" >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Attest the build provenance
         # The SLSA predicate records this workflow run and the revision that
         # triggered it. For a Version-produced tag that trigger is the push to main,
         # not the bump commit the tag points at, so the attestation identifies the
         # run and the builder, not the built source. The notes carry the built
-        # revision instead, and it is checkable against the tag.
+        # revision instead, and it is checkable against the tag. Both images are
+        # subjects; each was built on its own runner in this same run.
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: ${{ steps.image.outputs.image }}
+          subject-path: ${{ runner.temp }}/release/WallpaperMachine-*.dmg
 
       - name: Write the update manifest
         id: manifest
         # The updater reads this asset through github.com's releases/latest/download
         # redirect, which the 60-an-hour anonymous API limit does not count; releases
-        # without it are read from the API. Derived from the tag, the notes that become
-        # the release body and the image bytes checked above.
+        # without it are read from the API. Derived from the tag, the notes, both
+        # images and the newest CHANGELOG.md sections the update window lists.
+        # The architectures field is the union, so an Intel Mac is not refused a
+        # release that also contains the Apple silicon image.
         env:
           TAG: ${{ inputs.tag }}
           REPOSITORY: ${{ github.repository }}
-          IMAGE: ${{ steps.image.outputs.image }}
         run: |
           set -euo pipefail
+          version="${TAG#v}"
+          directory="${RUNNER_TEMP}/release"
           manifest="$(python3 scripts/update_manifest.py --tag "$TAG" --repository "$REPOSITORY" \
-            --notes "${RUNNER_TEMP}/release/notes.md" "$IMAGE")"
+            --notes "${directory}/notes.md" --changelog "${directory}/CHANGELOG.md" \
+            --metadata "${directory}/WallpaperMachine-${version}-arm64.dmg.metadata.json" \
+            --metadata "${directory}/WallpaperMachine-${version}-x86_64.dmg.metadata.json" \
+            "${directory}/WallpaperMachine-${version}-arm64.dmg" \
+            "${directory}/WallpaperMachine-${version}-x86_64.dmg")"
           echo "manifest=${manifest}" >> "$GITHUB_OUTPUT"
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-          IMAGE: ${{ steps.image.outputs.image }}
-          CHECKSUM: ${{ steps.image.outputs.checksum }}
           MANIFEST: ${{ steps.manifest.outputs.manifest }}
         # Drafts first, a live release is refused rather than clobbered, and Latest
         # is claimed only when no greater version is public: scripts/publish_release.py,
         # covered by scripts/tests/test_publish_release.py.
         run: |
-          python3 scripts/publish_release.py --tag "$TAG" --notes "${RUNNER_TEMP}/release/notes.md" \
-            "$IMAGE" "$CHECKSUM" "$MANIFEST"
+          set -euo pipefail
+          version="${TAG#v}"
+          directory="${RUNNER_TEMP}/release"
+          python3 scripts/publish_release.py --tag "$TAG" --notes "${directory}/notes.md" \
+            "${directory}/WallpaperMachine-${version}-arm64.dmg" \
+            "${directory}/WallpaperMachine-${version}-arm64.dmg.sha256" \
+            "${directory}/WallpaperMachine-${version}-x86_64.dmg" \
+            "${directory}/WallpaperMachine-${version}-x86_64.dmg.sha256" \
+            "$MANIFEST"

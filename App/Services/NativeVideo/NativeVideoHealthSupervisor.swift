@@ -53,7 +53,7 @@ protocol NativeVideoHealthTarget: AnyObject {
     /// what earns the recovery allowance back.
     func playbackProvedHealthy()
     /// Nothing left to try. The surface reports the wallpaper as unplayable,
-    /// which hands it to the scene engine.
+    /// which the host reports as a failed display.
     func giveUpOnPlayback(trigger: String, detail: String)
 }
 
@@ -64,10 +64,13 @@ protocol NativeVideoHealthTarget: AnyObject {
 /// A check settles first, because the system needs a moment to hand the
 /// decoder back after a wake, and then samples at a fixed step until the
 /// samples prove the pipeline works or the window ends. Healthy pipelines are
-/// usually proven within a couple of samples, so the common cost of a check is
-/// one short-lived video output and no visible change. A pipeline that is found
-/// stalled climbs the `NativeVideoHealthLadder`: a kick, one rebuild, then the
-/// hand-off, with a fresh look after each.
+/// usually proven within a couple of samples. The cost of a check is the video
+/// output it reads from: attaching one holds the picture for about a tenth of a
+/// second (issue 110), so checks are kept to what can cost a decoder, and the
+/// output stays on its item until the loop retires it rather than holding the
+/// picture a second time on its way out. A pipeline that is found
+/// stalled climbs the `NativeVideoHealthLadder`: a kick, one rebuild, then giving
+/// up (a failed display), with a fresh look after each.
 ///
 /// At most one check runs at a time. A trigger that arrives while the check is
 /// still only looking replaces it, since what the trigger describes is the
@@ -79,8 +82,14 @@ protocol NativeVideoHealthTarget: AnyObject {
 final class NativeVideoHealthSupervisor {
     struct Policy: Equatable {
         /// How long a surface has to have been paused before resuming it is
-        /// worth a check. A flick of the occlusion state is not.
-        var minimumPause: Duration = .seconds(5)
+        /// worth a check. The system reclaims a decoder over a long idle
+        /// (a desktop covered for a long time, display sleep, a locked
+        /// session, which a wake or the session's return checks anyway), not
+        /// while a full-screen app or Mission Control covers it for a moment.
+        /// A check holds the picture once when its output is attached, so one
+        /// after every short cover was a visible hitch each time the desktop
+        /// came back (issue 110).
+        var minimumPause: Duration = .seconds(300)
         /// Wait between a trigger, or a repair, and the next look.
         var settle: Duration = .milliseconds(500)
         /// How long the samples may go on without proving anything.

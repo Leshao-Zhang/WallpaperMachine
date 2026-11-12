@@ -22,6 +22,10 @@ struct WallpaperPreviewRequest: Equatable, Sendable {
     let scalingMode: Int32
     var scalingFactor: Double
     let volume: Float
+    /// Wallpaper Engine's per-wallpaper options with the draft in them; nil for a web page.
+    let engineOptions: WallpaperEngineOptions?
+    /// The saved scene quality, for a scene preview.
+    let sceneQuality: SceneQualitySettings
 
     init(_ input: BridgeWallpaperPreview) throws {
         switch input.kind {
@@ -38,14 +42,11 @@ struct WallpaperPreviewRequest: Equatable, Sendable {
         assetsURL = URL(fileURLWithPath: input.assetsPath, isDirectory: true)
         propertiesJSON = input.propertiesJson
         fps = min(30, max(1, input.fps))
-        switch input.scalingMode {
-        case .none: scalingMode = 0
-        case .stretch: scalingMode = 1
-        case .match: scalingMode = 2
-        case .fill: scalingMode = 3
-        }
+        scalingMode = input.scalingMode.rendererValue
         scalingFactor = input.scalingFactor
         volume = input.volume
+        engineOptions = input.engineOptions.map(WallpaperEngineOptions.init)
+        sceneQuality = SceneQualitySettings(input.sceneQuality)
     }
 }
 
@@ -95,5 +96,19 @@ actor WallpaperPreviewLoader {
     private static func contains(_ url: URL, in root: URL) -> Bool {
         let base = root.pathComponents, path = url.standardizedFileURL.pathComponents
         return path.count > base.count && Array(path.prefix(base.count)) == base
+    }
+}
+
+extension BridgeScalingMode {
+    /// The renderer's own number for the mode, as `owe_property_scaling_mode` takes it and the
+    /// lock-screen configuration carries it.
+    var rendererValue: Int32 {
+        switch self {
+        case .none: 0
+        case .stretch: 1
+        case .match: 2
+        case .fill: 3
+        case .matchBlurred: 4
+        }
     }
 }

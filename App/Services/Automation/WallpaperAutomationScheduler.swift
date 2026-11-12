@@ -3,7 +3,10 @@ import AppKit
 /// Resolves one automatic choice per display; all mutations share the user's command queue.
 @MainActor
 final class WallpaperAutomationScheduler {
-    typealias Queue = @MainActor (String, @escaping @MainActor () async throws -> Void) async throws -> Bool
+    /// Runs the change in the display's command slot and says how that ended: whether it ran, and
+    /// when it did not, whether a choice of the user's or another automatic command took its place.
+    typealias Queue = @MainActor (String, @escaping @MainActor () async throws -> Void) async throws
+        -> UserCommandQueue.Outcome
     typealias Apply = @MainActor (WallpaperAutomationTarget, String) async throws -> Void
     typealias Restore = @MainActor (WallpaperAutomationDisplayState, String, Bool) async throws -> Void
 
@@ -33,10 +36,10 @@ final class WallpaperAutomationScheduler {
     private var focusKey: String?
     private var focusDisplay: String?
     var onSettled: (() -> Void)?
-    var onInputsChanged: (() -> Void)?
+    var onInputsChanged: ((Notification.Name) -> Void)?
     private struct CachedResolution {
         let revision: UInt64
-        let location: WallpaperSolarLocation?
+        let solar: WallpaperSolarSettings?
         let dark: Bool
         let computedAt: Date
         let result: WallpaperAutomationPlanner.Result
@@ -90,13 +93,20 @@ final class WallpaperAutomationScheduler {
 
     private func observe(_ center: NotificationCenter, name: Notification.Name, object: AnyObject?) {
         let token = center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.resolutions.removeAll(); self?.evaluate(); self?.onInputsChanged?() }
+            MainActor.assumeIsolated {
+                self?.resolutions.removeAll()
+                self?.evaluate()
+                self?.onInputsChanged?(name)
+            }
         }
         observers.append((center, token))
     }
 
     /// An explicit selection lasts until the next event. During Focus, preserve it on exit too.
-    func noteManualChoice(_ display: String) {
+    /// On a display that has a wallpaper for each desktop, a wallpaper chosen by hand becomes the
+    /// current desktop's own: it stays when the person leaves and comes back.
+    func noteManualChoice(_ display: String, wallpaperID: String? = nil) {
+        if let wallpaperID, assignCurrentDesktop(display, to: wallpaperID) { return }
         let resolution = desired(on: display)
         if store.focusRestore[display] != nil, !resolution.focused {
             do { try store.forgetFocus(on: display) }
@@ -104,6 +114,25 @@ final class WallpaperAutomationScheduler {
         } else { store.preserveManualWallpaper(on: display) }
         if let event = resolution.event { store.markHandled(event.key, on: display) }
         else if store.errors[display] != nil { store.markHandled("manual", on: display) }
+    }
+
+    /// Saves `wallpaperID` as the current desktop's choice. False when the display does not follow
+    /// desktops, the desktop is unknown, or a Focus filter decides its wallpaper now.
+    private func assignCurrentDesktop(_ display: String, to wallpaperID: String) -> Bool {
+        let configuration = store.configuration(for: display)
+        guard configuration.mode == .spaces, store.focusRestore[display] == nil,
+              !desired(on: display).focused, let visit = spaceVisit(display) else { return false }
+        let target = WallpaperAutomationTarget(kind: .wallpaper, id: wallpaperID)
+        guard target.isValid else { return false }
+        if configuration.spaces[visit.spaceID] != target {
+            do { try store.update(display) { $0.spaces[visit.spaceID] = target } } catch {
+                AppLog.error("could not keep the wallpaper for this desktop: \(error.localizedDescription)")
+                return false
+            }
+        }
+        // What the desktop now asks for is already on screen.
+        if let event = desired(on: display).event { store.markHandled(event.key, on: display) }
+        return true
     }
 
     func evaluate() {
@@ -156,27 +185,43 @@ final class WallpaperAutomationScheduler {
         return resolution.event.map { store.handled[display] == $0.key } ?? true
     }
 
+    /// The choice this display is about to change to, while that change waits or runs; nil once
+    /// it is handled or while a Focus restoration decides instead.
+    func pendingTarget(on display: String) -> WallpaperAutomationTarget? {
+        let resolution = desired(on: display)
+        guard store.focusRestore[display] == nil || resolution.focused,
+              let event = resolution.event, store.handled[display] != event.key else { return nil }
+        return event.target
+    }
+
+    /// Whether this display's change has been admitted and is running now, rather than waiting
+    /// for playback to be able to run it.
+    func isApplying(on display: String) -> Bool { inFlight.contains(display) }
+
     private func desired(on display: String) -> Resolution {
         let time = now()
         let configuration = store.configuration(for: display)
         let appearance = dark()
         let result: WallpaperAutomationPlanner.Result
         if let cached = resolutions[display], cached.revision == configuration.revision,
-           cached.location == store.location, cached.dark == appearance,
+           cached.solar == store.solar, cached.dark == appearance,
            time >= cached.computedAt, time < cached.result.reevaluateAt {
             result = cached.result
         } else {
             result = WallpaperAutomationPlanner.resolve(configuration, now: time,
-                dark: appearance, location: store.location, calendar: calendar)
-            resolutions[display] = .init(revision: configuration.revision, location: store.location,
+                dark: appearance, solar: store.solar, calendar: calendar)
+            resolutions[display] = .init(revision: configuration.revision, solar: store.solar,
                 dark: appearance, computedAt: time, result: result)
         }
         var resolved = Resolution(event: result.current, next: result.next, reevaluateAt: result.reevaluateAt)
         if configuration.mode == .spaces {
             let visit = spaceVisit(display)
             resolved.baseAvailable = visit != nil
-            if let visit, let target = configuration.spaces[visit.spaceID] {
-                resolved.event = .init(key: "space:\(configuration.revision):\(visit.spaceID):\(visit.token)", date: time, target: target)
+            if let visit, let target = configuration.desktopTarget(visit.spaceID, firstDesktop: visit.firstSpaceID) {
+                // The target is part of the event: a desktop that follows Desktop 1 changes target
+                // within one visit when the desktops are reordered and another one becomes first.
+                let key = "space:\(configuration.revision):\(visit.spaceID):\(visit.token):\(target.kind.rawValue):\(target.id)"
+                resolved.event = .init(key: key, date: time, target: target)
             }
         }
         if let selection = focus.selection {
@@ -200,7 +245,7 @@ final class WallpaperAutomationScheduler {
             defer { inFlight.remove(display); tasks[display] = nil; evaluate(); onSettled?() }
             var performed = false
             do {
-                let admitted = try await queue(display) { [self] in
+                let outcome = try await queue(display) { [self] in
                     try Task.checkCancellation()
                     guard self.started, self.displays().contains(display) else { return }
                     let resolution = self.desired(on: display)
@@ -218,11 +263,15 @@ final class WallpaperAutomationScheduler {
                         self.store.markHandled(event.key, on: display)
                     }
                 }
-                if !admitted, !performed {
-                    // A later command took this display's slot. Do not enqueue another copy
-                    // ahead of the user's accepted choice while that command is starting.
+                if !performed, outcome == .yieldedToUser || outcome == .replacedByUser {
+                    // The user's command took this display's slot. Do not enqueue another copy
+                    // ahead of that accepted choice while it is starting.
                     store.markHandled(key, on: display)
                 }
+                // Replaced by another automatic command (an update reloading the files, a playlist
+                // change): nothing the user chose stands in this change's place, so it is left
+                // unhandled and the evaluation that follows asks for it again. Marking it handled
+                // would drop a Focus wallpaper, or the restoration after one, for good.
             } catch is CancellationError {
                 return
             } catch {

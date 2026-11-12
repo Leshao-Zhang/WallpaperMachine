@@ -32,7 +32,9 @@ final class TelemetrySamplerTests: XCTestCase {
             timerWakeups: 0, drawRequests: 0, drawTicksSuppressed: 0, drawsExecuted: draws,
             drawsDropped: dropped, renderSubmissions: 0, renderFailures: 0, presentRequests: presents,
             gpuCompletions: 0, simulationTicks: 0, presentsSkippedUnchanged: 0,
-            tickIntervalMicros: tick, contentPeriodMicros: 0, videoDecodeOutputs: 0, videoSeeks: 0,
+            presentedFrames: 0, presentsDropped: 0, presentGaps1Vsync: 0, presentGaps2Vsync: 0,
+            presentGaps3plusVsync: 0, tickIntervalMicros: tick, contentPeriodMicros: 0,
+            vsyncPeriodMicros: 0, videoDecodeOutputs: 0, videoSeeks: 0,
             videoFramesSelected: 0, videoFramesReused: 0, videoFramesSkipped: 0,
             videoSelectedGeneration: 0, videoConversions: 0, videoImports: 0,
             videoConversionLiveBytes: 0, videoConversionPeakLiveBytes: 0)
@@ -47,7 +49,7 @@ final class TelemetrySamplerTests: XCTestCase {
     private static func context(wallpaper: String = "2873461829") -> TelemetryFrameContext {
         TelemetryFrameContext(
             scenes: [7: .init(wallpaperID: wallpaper, kind: .scene, backend: "native_metal",
-                              fallback: false, mode: "continuous")],
+                              mode: "continuous")],
             displays: [7: .init(width: 3024, height: 1964, scale: 2, hz: 120, main: true)],
             frameRateCap: nil, renderScale: 1, reducedQuality: false, battery: false,
             lowPower: false, thermal: "nominal")

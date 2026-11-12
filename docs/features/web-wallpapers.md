@@ -29,7 +29,7 @@ for them.
 - Mouse input reaches the page: hover, clicks, drags, right clicks and scrolling
   over the desktop are mirrored into the wallpaper. Finder keeps its icons and
   the desktop keeps every system behavior, so a click on an icon also reaches
-  the page. Settings → General → *Keep windows in place when clicking the
+  the page. Settings → Desktop & Lock Screen → *Keep windows in place when clicking the
   wallpaper* turns off macOS's "Click wallpaper to reveal desktop" option (the
   same value System Settings → Desktop & Dock writes) so a click no longer
   slides every window aside.
@@ -44,28 +44,33 @@ for them.
   settings first) and open the Web Inspector on one. It is off in a release build
   until the user turns it on, takes effect on running pages without a reload and is
   not part of a backup. See [inspecting a web wallpaper](diagnostics.md#inspecting-a-web-wallpaper).
-- On macOS 26+, **Use wallpaper as screen saver** can present web and still-image
-  projects through the native extension. It uses committed properties and isolated
-  file copies, without audio, capture or interaction. See
-  [Screen saver](lock-screen.md#use-wallpaper-as-screen-saver) for activation,
-  independent selection and verification limits. **Animate lock screen** does not
-  support web projects; that combination is reported as not applicable, never as a
-  failure.
+- On macOS 26+, **Animate lock screen** and **Use wallpaper as screen saver** present
+  web and still-image projects through the native extension, as live pages. They use
+  committed properties and isolated file copies, without audio, capture or
+  interaction. See [web and still wallpapers](lock-screen.md#web-and-still-wallpapers)
+  and [Screen saver](lock-screen.md#use-wallpaper-as-screen-saver) for activation,
+  independent selection and verification limits.
 
 ## Host protocol
 
 The page is loaded from `file://` with read access to its project folder, matching
 Wallpaper Engine's CEF host: ES modules, `fetch()` and media inside the project
 folder work, and `location.protocol` is `file:`. The top frame cannot navigate away
-from the entry page; subframes and network requests are unrestricted (macOS ATS
-applies, so plain `http://` requests fail).
+from the entry page; subframes and network requests are unrestricted, plain `http://`
+included, as in Chromium. The app and the lock-screen extension relax App Transport
+Security for web content only (`NSAllowsArbitraryLoadsInWebContent` in their
+`Info.plist`): the app's own requests to Steam, pixiv and GitHub still need HTTPS, and
+WebKit still blocks an `http://` subresource of an `https://` page as mixed content.
+The sign-in windows are web content too, and load only Steam's and pixiv's HTTPS pages.
 
-Two scripts are installed at document start, built in one place
+Five scripts are installed at document start, built in one place
 (`Shared/WebWallpaperUserScripts.swift`) for the desktop page, the preview and the
 screen-saver web surface alike; desktop and preview pages get a copy built for each
 document. The host script (`Shared/WebWallpaperProtocol.swift`) is the author API and
-everything in the table below, and runs in the main frame only. The other script
-closes one gap between WebKit and Chromium. WebKit
+everything in the table below, and runs in the main frame only. The other four close
+gaps between WebKit and Chromium: one in file requests, one in error stacks
+([below](#error-stacks)), one in idle callbacks ([below](#idle-callbacks)) and one in
+fonts ([below](#windows-fonts)). The first one is described here. WebKit
 answers a `fetch()` or `XMLHttpRequest` of a project file with status 0 and no
 headers, where Chromium answers 200 with a `Content-Type` taken from the extension. The script gives a found `file://` GET/HEAD response that status and
 type, so loaders that check `ok`, and WebGL exports (Unity, Emscripten) that call
@@ -77,13 +82,77 @@ bodies stay native: nothing is copied, retried or run per frame.
 That file-request script runs in every frame, so a page that hosts its player in an
 iframe of a project file, or in a `srcdoc` or script-created frame, gets the same
 answers as the page itself; it installs once per document and marks it with a
-non-enumerable `window.__mweFileCompat`. A subframe gets nothing else: no
+non-enumerable `window.__mweFileCompat`. A subframe gets nothing else but
+[idle callbacks](#idle-callbacks) and the [font aliases](#windows-fonts): no
 `wallpaperPropertyListener` delivery, no audio, media or random-file registration,
 and the host drops any message on the host channel that does not come from the main
 frame, so a frame (a remote embed included) cannot subscribe to audio or ask for
 files on the wallpaper's behalf. A frame served over http(s) keeps its own `fetch` and `XMLHttpRequest`.
 Web workers are out of reach of a user script, so a worker's own `fetch` of a project
 file still sees WebKit's status 0.
+
+### Error stacks
+
+Chromium's `Error().stack` starts with a `Name: message` line and gives each frame as
+`    at function (location)`, or `    at location` for top-level code and anonymous
+functions; WebKit writes `function@location` lines and no header. A page written for
+Wallpaper Engine that reads its caller off a fixed line of a stack, as a common logging
+helper built at start-up does, got `undefined` there and threw before it set up its
+canvas, property listener and animation loop, leaving only its plain background. The
+error-stack script (`Shared/WebWallpaperErrorStacks.swift`) runs first in every frame and
+replaces `Error` and its native subclasses with constructors that build the browser's own
+error (same prototype, so `instanceof`, `constructor` and `extends Error` are unchanged),
+leave their own frame out, and give it a `stack` in V8's format, written from WebKit's
+frames when first read. Built-in frames read `at name (<anonymous>)`; `new ` before a
+constructor's frame and the receiver's type before a method name are not reproduced.
+`Error.stackTraceLimit` and `Error.captureStackTrace` keep working, and `stack` can be
+assigned. Errors the engine raises itself (a `TypeError` from reading a property of
+`undefined`) are not built through a constructor and keep WebKit's format.
+
+### Idle callbacks
+
+Chromium has `requestIdleCallback` and `cancelIdleCallback`; WebKit on macOS has neither, so a
+page written for Wallpaper Engine that calls `window.requestIdleCallback` without checking
+threw a `TypeError` there. A visualizer that asks for an idle callback in its start-up, just
+before its first `requestAnimationFrame`, stopped at that line and drew nothing while its
+audio listener still received the spectrum. The idle-callback script
+(`Shared/WebWallpaperIdleCallbacks.swift`) runs in every frame, whatever its protocol, and
+defines both functions where the browser lacks them; a WebKit that has its own keeps it.
+
+It follows the specification's idle periods with the longest one Chromium gives, 50 ms. A
+callback runs in the next period, which starts on a timer once the previous one has ended;
+callbacks requested from inside a period wait for the next one, so a callback that asks
+again from its own body runs at most 20 times a second, not at the timer clamp.
+`timeRemaining()` counts down to the end of the period, and callbacks still waiting when it
+reaches zero move to the next one. A `timeout` runs a callback that is still waiting with
+`didTimeout` true and no time remaining. A callback that throws is reported, and the rest of
+the period's callbacks still run. Nothing runs while nothing is waiting.
+
+### Windows fonts
+
+Wallpaper Engine runs a web wallpaper in Chromium on Windows, which finds the fonts a stock
+Windows has; WebKit on a Mac finds none of them, so a family it lacks falls to the page's
+next family or the standard font, and CoreText's cascade takes Chinese from Songti, a serif
+capped at bold. A heading set in `900 26pt SimHei` was a thin Song face where Wallpaper
+Engine draws a heavy sans, and a stack that starts with `Segoe UI` set its separators a third
+wider. The font script (`Shared/WebWallpaperFontAliases.swift`) runs in every frame of a
+page served from a file or the app, before the page's own style, and declares for each
+Windows font this Mac does not have an `@font-face` per name of the font that maps it to the
+macOS face standing in for it: `SimHei`, `Microsoft YaHei` and `DengXian` (and their Chinese
+names) to PingFang SC, `Microsoft JhengHei` to PingFang TC, `SimSun` to Songti SC, `KaiTi` to
+Kaiti SC, `Yu Gothic`, `Meiryo` and `MS Gothic` to Hiragino Sans, `MS Mincho` to Hiragino Mincho
+ProN and `Malgun Gothic` to Apple SD Gothic Neo, regular for weights below 550 and the heavy
+face from there (`SimHei` and `KaiTi` answer the Han range only, since stock Windows has
+neither and their Latin goes to the page's next family); `Segoe UI`, `Calibri`, `Cambria` and
+`Consolas` to PT Sans, PT Sans, Charter and Andale Mono, scaled by `size-adjust` (98.7, 93,
+99.6 and 91.6 percent) to the real fonts' digit advance, the same stand-ins and numbers
+as the scene renderer's text. A font is left alone when it is installed, which is told for
+the four Latin fonts by the width of their digits (macOS answers `Calibri` with a
+Helvetica-width substitute of its own, and Office for Mac installs the real fonts) and for
+the others by text set in the name measuring other than the fallback; a font the page
+declares for the same name later in its own style takes precedence, since the script's
+style is first in the document, and a page served over http(s) is left as it is. The script
+installs once per document and marks it with a non-enumerable `window.__mweFontAliases`.
 
 | Call into the page | When |
 |---|---|
@@ -100,26 +169,37 @@ statements in the page keep working. Property `order`/`index` values are orderin
 hints, not identity: fractional values are preserved and properties that share one
 all stay, in declaration order.
 
-Values are replayed in full to a listener that registers after the first push, so
-pages that install the listener from a deferred module still start.
+Assigning `wallpaperPropertyListener` is not a delivery, as in Wallpaper Engine: the
+host never calls a listener from inside the statement that assigned it, and a
+listener that replaces one which already took the values in hears nothing until a
+value changes. A page that assigns its listener while it renders, as a React
+component body does, would otherwise set state inside its own render on every pass
+and loop until React gave up and left the page blank. What the page has not taken
+in (properties, the pause state and directory files that arrived before it had a
+listener or a handler, or that its handler threw on) is replayed once the turn that
+assigned the listener is over, so pages that install the listener from a deferred
+module still start. A listener that a handler assigns during that replay gets
+another pass after it, so a handler the replaced listener lacked still hears what it
+is owed; a pass follows only one the page took something in from, so a handler that
+throws and assigns a listener every time is not called in a loop.
 
 `applyUserProperties` and `applyGeneralProperties` follow Wallpaper Engine's
-contract: the first delivery a listener takes in carries every property, and every
+contract: the first delivery the page takes in carries every property, and every
 later one only the properties whose values differ, in any key order; nothing is
 called when nothing differs. The host resends the whole committed set on each
 apply (the screen saver on every reconcile, pause toggles included) and the shared
-host script works out the difference per listener, so a page that tests each key
-sees the same calls on the desktop, in the preview and on the lock screen. A
-listener assigned late or again, a reloaded document and a content-process restart
-start from the whole set; a handler that is missing or throws has not taken a
-delivery in, so the next call is measured against what it last accepted. A `file`
+host script works out the difference against what the page last accepted, so a
+page that tests each key sees the same calls on the desktop, in the preview and on
+the lock screen. A reloaded document and a content-process restart start from the
+whole set; a handler that is missing or throws has not taken a delivery in, so the
+next call is measured against what it last accepted. A `file`
 property the host stages again counts as changed once even though its value reads the
 same: the staged path is built from the property and the file's name, so a file
 reselected after it was edited, or another folder's file of the same name, arrives
 under the path the page already has, and the desktop host passes the restaged property ids
 along with the payload (`restagedFiles` of `WebWallpaperHost.stageAssets`). A paused
-page draws that change like any edit, and a handler that threw on it is sent it
-again. A page
+page draws that change like any edit, and a handler that threw on it, or was
+missing when it arrived, is sent it again. A page
 that rebuilt itself from the payload on every edit has to keep its earlier values,
 as it must under Wallpaper Engine. `setPaused` is not deduplicated.
 
@@ -156,7 +236,43 @@ call of a page, a reload and a content-process restart are paced; a change on a
 running page (a Performance or power-source change) is sent together with
 `applyGeneralProperties` and applies from the next frame without reloading, and
 callbacks already waiting are kept. It is logged at debug level
-(`frame limit <n|none>`). The native screen-saver surface does not get the wrapper.
+(`frame limit <n|none>`). The lock-screen and screen-saver surface
+(`ScreenSaverWebSurface`) builds its page with the same limit from the published `fps`
+and retunes it with each property delivery, so a page there draws no more often than on
+the desktop; its readiness check waits two paced frames, at most two intervals of the limit.
+
+### Device-pixel layout
+
+Wallpaper Engine starts its Chromium with `force-device-scale-factor=1` (read off
+`webwallpaper64.exe`, 2.8.42), so a web wallpaper is laid out in its display's device pixels:
+`devicePixelRatio` is 1 and `innerWidth` is the display's width in pixels, whatever the
+system's scaling. WebKit lays a page out in points, which on a Retina display gave the page
+half the CSS pixels across: everything a page sizes in CSS pixels (text, panels, a
+visualiser's radius, a game board) came out twice the size Wallpaper Engine draws it at, and
+what did not fit was cut off. `WebWallpaperPage` zooms its web view out by the backing scale of
+the window it is in (`WKWebView.pageZoom`, `WebWallpaperProtocol.pageZoom(forBackingScale:)`),
+which gives the same layout: one CSS pixel per device pixel, `devicePixelRatio` 1, width media
+queries against the pixel width, and still one rendered pixel per device pixel, so nothing is
+drawn softer. WebKit does not apply the zoom to `window.screen`, so the host script reports
+`screen.width`, `height`, `availWidth` and `availHeight` in device pixels while the scale is
+above 1 (a page that sizes its canvas from `screen.width` would otherwise cover part of the
+display), and leaves WebKit's own properties at 1.
+
+The web view reports its window's backing scale itself when it joins the window, which the host
+does before the first load, so a document starts with the layout and the first read of a page
+already sees it; it is part of each document's script like the frame-rate limit. A window that
+moves to a display with another scale relays the running page out without a reload, and WebKit
+raises a `resize` event for it. The preview lays its page out the same way for its own window,
+and the lock-screen and screen-saver surface zooms its page out by the scale it draws at, so
+the wallpaper keeps its layout when the Mac locks. Compared with Wallpaper Engine's frames of
+the local Workshop pages in a VM ([reference frames](../testing/wallpaper-engine-reference.md)),
+a fixed-size game board and a visualiser's circle that were twice Wallpaper Engine's size now
+match it.
+
+A page that sizes a canvas from `innerWidth` without `devicePixelRatio` used to draw a quarter of
+the display's pixels and be stretched; it now draws every pixel, as under Wallpaper Engine. The
+pages that read the ratio draw the same number of pixels as before. The **Internal render scale**
+below still multiplies the ratio, now from 1.
 
 ### Render scale
 
@@ -177,8 +293,7 @@ and raises one `resize` event on the window, however many changes share a turn, 
 pages that rebuild their canvas or WebGL buffers on `resize` pick it up; the
 value a document starts with raises none. Changes are logged at debug level
 (`render scale <n>`). A page that assigns `devicePixelRatio` itself keeps its own
-value. The preview, the control panel and the native screen-saver surface are
-never scaled.
+value. The preview and the native screen-saver surface are never scaled.
 
 The page may call `wallpaperRegisterAudioListener`, the five
 `wallpaperRegisterMedia*Listener` functions (status, properties, thumbnail,
@@ -194,13 +309,16 @@ media state is re-derived on resume, and directory additions and removals are he
 across the suspension and replayed in order.
 
 The wallpaper web view has exactly one `WKScriptMessageHandler`, named
-`mweWallpaper`, carrying listener registration and random-file requests; it is
-removed when the page stops. It is not the control panel's channel, which is a
-separate web view with its own handler (see [architecture](../architecture.md#control-panel-wkwebview-and-the-javascript-bridge)).
+`mweWallpaper`, carrying listener registration, random-file requests and the page's
+own errors and warnings for the log ([diagnostics](diagnostics.md#inspecting-a-web-wallpaper));
+it is removed when the page stops. The desktop page and the screen-saver surface both read it
+through `WebWallpaperProtocol.PageMessage`, which drops anything but a known tag with
+well-formed fields: a random-file request needs a request id of 1 to 128 characters and a
+property name of 1 to 256.
 
 ## Runtime shape
 
-- Rust (`upstream/renderer/crates/bridge`): `WallpaperProjectType::Web` entries are
+- Rust (`Renderer/Bridge`): `WallpaperProjectType::Web` entries are
   `supported`. `ActivationInputs::build()` routes web projects away from the scene
   engine and `build_web()` yields one `WebWallpaperDesc` per assigned display
   (mirrors included). The uniffi call `web_wallpapers()` exposes them as
@@ -208,7 +326,7 @@ separate web view with its own handler (see [architecture](../architecture.md#co
   scale, paused, volume, mute, audio and media consent, and the effective property
   values as the `applyUserProperties` payload). A running web wallpaper makes the
   render-scale control applicable. The same web descriptors are exported to the
-  native screen saver as lock-screen scenes with a web entry file.
+  native lock screen and screen saver as lock-screen scenes with a web entry file.
 - Swift (`App/Services/WebWallpaper/`): `WebWallpaperHost` re-reads
   `webWallpapers()` on every snapshot and diffs it against one `WebWallpaperWindow`
   (`MWEWebWallpaperDesktopWindow`, desktop level, all Spaces, mouse-transparent) per
@@ -216,6 +334,30 @@ separate web view with its own handler (see [architecture](../architecture.md#co
   with the committed frame-rate limit and render scale on every `load()`),
   property/pause delivery,
   host-side suspension and content-process recovery.
+- **Desktop transition composition:** `WebWallpaperBackgroundView` supplies the
+  desktop window's black background through a `CAMetalLayer`. When AppKit creates
+  that backing layer, it submits one opaque black 1×1 drawable, stretched behind
+  the web view. It keeps the submitted surface through resizing and page
+  suspension, with no display link, timer, repeated GPU submission or CPU wait
+  for GPU completion. The ordinary black layer remains the fallback if Metal is
+  unavailable; failures to submit the frame are logged.
+  A live Metal surface prevents the Stage Manager transition from holding a
+  frozen picture of this window on macOS 27. An empty Metal layer or image queue
+  is insufficient: the frame must actually be submitted. This uses a small,
+  bounded Metal allocation and one GPU submission per backing layer. Battery
+  impact has not been measured.
+  `WebWallpaperWindowComposition` also preserves WindowServer's transition
+  surface policy (tag 55, `kCGSNeverFlattenSurfacesDuringSwipesTagBit`) at creation
+  and after live resize. AppKit clears the tag after `didEndLiveResize`, so it is
+  reapplied on the next main-queue turn. Optional SkyLight entry points are
+  resolved once; an unavailable API or rejected tag is logged. The
+  [native API example](https://gist.github.com/avaidyam/d3c76df710651edbf4da56bad3fea9d2)
+  documents the tag and resize behavior, also checked on macOS 27. The tag alone
+  and `NSCGSWindow.allowsFlattening = false` did not resolve #177; the latter is
+  not used. New OS versions still need the visible transition check below.
+  Distinguish a live web view from a suspension poster before attributing a hold
+  to WindowServer: the covered-desktop pause rule can detach the web view while
+  its window remains visible.
 - **Suspension** does not rely on the page cooperating. `setPaused` is an optional
   listener callback, so a page can ignore it; alongside it the host suspends all
   media playback (suspend and unsuspend, so media the user had paused is not
@@ -280,8 +422,8 @@ separate web view with its own handler (see [architecture](../architecture.md#co
   window-occlusion check; otherwise even a brief Space or Show Desktop transition
   can stop animation frames before the host's settling delay expires. If the
   selector is unavailable, the page keeps WebKit's default scheduling and the
-  limitation is logged. This does not change the control panel or native
-  screen-saver web surfaces.
+  limitation is logged. This does not change the native screen-saver web
+  surface.
 - **Frame rate.** The page is told the display's effective frame rate through
   `applyGeneralProperties({ fps })`, and many pages pace their own loop by it.
   WebKit draws a page near 60 fps even on a faster display, and it hands the page
@@ -335,7 +477,12 @@ separate web view with its own handler (see [architecture](../architecture.md#co
   running WebKit responds to them, and `WebWallpaperWindow` reports `isKeyWindow` as
   true because WebKit hit-tests hover only for active windows (it still cannot
   become key, so keyboard focus is never taken). The host script cancels
-  `contextmenu` defaults so WebKit's own menu never opens.
+  `contextmenu` defaults so WebKit's own menu never opens, and every frame of every
+  web surface cancels `dragstart` (`WebWallpaperProtocol.noDragScript`): the events
+  belong to Finder, so a drag WebKit started from an image, link or selection would
+  drop a copy onto the desktop and break Finder's selection rectangle. The page's
+  own handlers still see the event, and mouse-driven dragging inside a page is
+  unaffected.
   Moves are paced per window by `WebWallpaperMoveThrottle`, because a 1000 Hz mouse
   otherwise costs the main thread a rebuilt event and a WebKit hit test per report.
   The first move after a quiet stretch is delivered at once, moves inside the interval
@@ -385,6 +532,16 @@ values may occasionally exceed 1.0 and tells pages to clamp themselves, so this 
 documented deviation. How the spectrum is computed is in
 [audio-response.md](audio-response.md#what-wallpapers-receive).
 
+**A listener with Audio response off.** Wallpaper Engine calls a page's audio listener on its
+cadence whether or not anything plays, and pages are written for that: a visualiser that turns
+its lights or its idle animation on only once its listener has been called stayed dark here,
+because with the setting off nothing reached the listener at all. A registered listener that
+no audio reaches is therefore called with silence, 128 zeros, once a second while the page
+plays (not while it is paused or suspended), the spacing below; nothing is captured for it, no
+tap opens, and **Audio and media status** does not count it as delivery. With the setting on,
+the audio pump feeds the page, silence included, and this stays off. The lock screen feeds a
+subscribed page the same way ([lock screen](lock-screen.md)).
+
 **Silence.** When the sound stops, the analyser publishes one all-zero spectrum and
 then no more, so a visualizer that smooths in its callback would freeze part-way
 through its decay. The pump therefore repeats an all-zero spectrum
@@ -404,8 +561,9 @@ callback.
 
 ## Media integration
 
-Off by default, per wallpaper. Web pages register `wallpaperRegisterMedia*`
-listeners as above. The now-playing source is shared through `DesktopMediaSession`
+On by default, per wallpaper; saved choices are preserved, and a page whose
+wallpaper never saved one is told the setting is on. Web pages register
+`wallpaperRegisterMedia*` listeners as above. The now-playing source is shared through `DesktopMediaSession`
 and also feeds Scene wallpapers that have the same toggle on; sources, lifetime and
 lock-screen policy are in [media-integration.md](media-integration.md).
 
@@ -433,10 +591,20 @@ The official general-property payload remains `fps`, not an invented `volume`
 protocol.
 
 User mute and temporary app/Focus/other-audio mute compose in the existing bridge
-configuration; ending a rule does not clear user mute. Mirrored pages elect one
-presenting audible owner per actual source assignment (`WebWallpaperAudioOwnership`);
+configuration; ending a rule does not clear user mute. The gain other-app audio
+applies under **Reduce volume** ([Playback](performance.md#playback)) arrives as a
+lower Volume in the same descriptor, so it reaches media elements only: Web Audio
+keeps its level, and a level of 0% mutes the page as zero Volume does. Mirrored pages elect one
+presenting audible owner per actual source assignment (`MirrorAudioOwnership`, which native video
+follows too);
 independent assignments of the same project stay independent, and a hidden owner
 hands off to a visible mirror without duplicate sound.
+
+Whenever the host suspends a page (a pause, or a display no pixel can reach), its
+WebAudio stops rendering as well as going quiet: suspending media playback moves every
+`AudioContext` of the page to WebKit's `interrupted` state, and lifting it gives each
+context back the state the page left it in, so one the page had suspended itself stays
+suspended (`WebWallpaperSuspensionTests`). The host does not track contexts itself.
 
 These are private WebKit interfaces and may be unavailable on another macOS version.
 **Audio and media status** in the inspector reports the observed availability and
@@ -458,6 +626,11 @@ never substitutes Pause for an unavailable mute.
   interpolates by frame count rather than by time may judder at 30. The effective
   cadence snaps to the display's: 30 on a 60 Hz cadence is exactly every second
   frame, 40 averages 40 with uneven spacing.
+- The [device-pixel layout](#device-pixel-layout) zooms the page; `matchMedia` resolution
+  queries (`(resolution: 1dppx)`, `-webkit-min-device-pixel-ratio`) still answer the
+  display's own density, subframes see the display's `screen` in points, and a page that
+  sized itself for a smaller viewport has its fixed-size parts as small as Wallpaper Engine
+  draws them on a display with as many pixels.
 - The render scale only helps a page that sizes its canvases or WebGL buffers from
   `devicePixelRatio` and reads it again on `resize`. A page that reads the ratio
   once at start keeps full resolution until it reloads, `matchMedia` resolution
@@ -467,21 +640,48 @@ never substitutes Pause for an unavailable mute.
 - The `fetch`/`XMLHttpRequest` fixes for project files reach the page and every frame
   it embeds, not web workers: a `fetch` made inside a worker still gets WebKit's
   status 0 and no `Content-Type` for a local file.
-- Inspection covers the desktop pages and the live preview only. The screen saver,
-  the lock-screen extension and the control panel are never attachable through this
-  setting, and an inspected page's JavaScript is open to anyone using this Mac's
+- [Idle callbacks](#idle-callbacks) cannot see frames: Chromium ends an idle period at the
+  next frame of a page that animates, but here every period lasts 50 ms, so a page that
+  fills `timeRemaining()` with work while it animates can hold back a frame for that long.
+- The [Windows font names](#windows-fonts) are a table of the families the local wallpapers
+  name, not every Windows font. The generic families (`sans-serif`, `monospace`, `system-ui`),
+  which differ between Chromium on Windows and WebKit, and the real fonts' line metrics
+  (`ascent-override` and its siblings, whose support in the shipped WebKit is not
+  established) are not matched, so a stand-in's lines can stand a little apart from the
+  real font's. A page that ships only a regular face under a Windows name and asks for bold
+  draws the stand-in's bold, since the script's heavy face matches that weight better than
+  the page's one face does. Only the digit advance of the Latin fonts is fitted, so a heading
+  in one is a few percent off; no frame of Wallpaper Engine's of a Latin interface font was
+  compared. The Chinese families were checked in a page, canvas text at weight 900 equal to
+  PingFang SC Semibold, and PingFang SC, Kaiti SC and the Hiragino faces are downloadable
+  system assets that a Mac may not have (the alias then does nothing).
+- Inspection covers the desktop pages and the live preview only. The screen saver
+  and the lock-screen extension are never attachable through this setting, and an inspected page's JavaScript is open to anyone using this Mac's
   Safari while it is on.
+- **A page's `<video>` is colour-managed by WebKit; Wallpaper Engine's Chromium shows the
+  decoded values as sRGB.** WebKit passes the stream's colour tags to CoreVideo and the
+  system converts them to the display's colour space. A stream that is untagged or tagged
+  BT.709 has its transfer curve read as gamma 1.96 and shown through sRGB's 2.2, so
+  mid-tones come out lighter: on a limited-range ten-step grey ramp 80 reads 90, 110 reads
+  120 and 160 reads 169 while black and white stay, a mean error of 6.5 levels. An
+  untagged VP8 WebM is also decoded with BT.601 coefficients (skin 200/150/120 reads
+  199/157/132); untagged H.264, HEVC and VP9 use BT.709. The same clip tagged with the
+  sRGB transfer, BT.709 primaries and BT.709 matrix reads back as the decoded values
+  (mean error 0.9) for VP8, VP9, H.264 and HEVC, which is what Wallpaper Engine's frame
+  matches. In an MP4 the `colr` box and the H.264 VUI each work alone, and `colr` wins
+  when they disagree. A project's files are loaded straight from disk, so the host cannot
+  retag them, and it applies no compensation: a filter on the `<video>` would be a
+  full-resolution software pass for every frame (about 160 ms more per 3456 x 1944
+  snapshot, 60 ms at 1920 x 1080) and would have to know each stream's tags to undo
+  them. Measured on offscreen snapshots; see [Verification](#verification) for what was not.
 - Nonzero WebAudio gain is not controlled by the native media-volume interface;
   whole-page Mute still applies where WebKit exposes it.
-- A paused wallpaper's WebAudio is muted (`WebWallpaperAudioOwnership` gives a paused
-  page no audible output) but not suspended: the host has no `AudioContext`
-  handling, and what WebKit's own throttling does to a detached page's audio graph
-  is unmeasured.
 
 ## Verification
 
 The page host is tested against a real offscreen `WKWebView` with no desktop window
-(`Tests/Unit/WebWallpaper/`: module loading, late-listener replay, local request
+(`Tests/Unit/WebWallpaper/`: module loading, late-listener replay, a listener
+re-assigned on every render, local request
 metadata in the page and in iframe, `srcdoc` and script-created frames, pause
 composition, suspension by presentation and by pause with its
 first-frame grace and edits shown while paused, navigation lockdown, forwarded pointer events, mouse routing
@@ -490,14 +690,41 @@ cadence and in a real page with the rate a slow or full-refresh page draws at, t
 rebuilt when a frame rate crosses a fast display's refresh with its render scale, pause,
 limit and pointer rate carried over, render scale on `devicePixelRatio` including the
 resize rebuild of a canvas page, the audio pump with its silence cadence on a
-hand-moved clock, the inspection switch on running, new and preview pages) and the bridge contract in
-`upstream/renderer/crates/bridge/src/tests/` (`apply_options.rs`,
+hand-moved clock, the inspection switch on running, new and preview pages,
+`WebWallpaperDeviceLayoutTests` (a page in a window is laid out in its display's device pixels
+from its first line with `screen` in device pixels, a scale change relays out the running
+document without a reload and 1 restores WebKit's own `screen`, a reload starts at the
+committed scale), the silence a listener with Audio response off hears
+(`WebWallpaperAuthorAPITests`), `WebWallpaperIdleCallbackTests` (a page that asks for an idle callback before its first
+frame gets to its frame, a self-repeating callback runs once per 50 ms period, order,
+cancellation, a throwing callback and the timeout, a native function kept, and every frame
+of every surface given the script), `WebWallpaperErrorStackTests` (a logger built at start-up
+that reads its caller off the fifth stack line starts, V8's header and frame lines, types,
+`cause`, the frame limit, `captureStackTrace` and assignment unchanged, one install per
+document, every frame of every surface given the script), and `WebWallpaperFontAliasTests`: SimHei and Microsoft YaHei draw their Han in PingFang SC
+and not Songti, Segoe UI's digits are PT Sans's at 98.7 percent and the four Latin fonts have the
+real fonts' digit advance, a page's own `@font-face` of the same name wins, the style comes first in the
+document, subframes get it, an https document does not, and every surface's user scripts hold it) and the bridge contract in
+`Renderer/Bridge/src/tests/` (`apply_options.rs`,
 `quality_settings.rs`, `web_audio_media.rs`); file and directory properties are
 covered under [user files](user-files.md#verification), and the domain inventory is in
 [coverage](../testing/coverage.md). The held picture over a replacement page is covered
-there with a fake window; whether 500 ms after `didFinish` is enough for a real project's
-first paint, and how long the system picture shows while a page's window is replaced, need
+there with a fake window, and the wait for its first committed frame in
+`WebWallpaperFrameConfirmationTests`; how much of a real project's picture that frame shows,
+and how long the system picture shows while a page's window is replaced, need
 an authorized desktop run, listed in [manual smoke](../testing/manual-smoke.md#wallpaper-switching).
+Stage Manager's desktop/panel click transitions need the visible-frame check in
+[manual smoke](../testing/manual-smoke.md#native-desktop-posters-and-mission-control):
+the page can continue receiving animation callbacks while its visible picture is
+frozen. Callback timing alone is not evidence of smooth presentation.
+`WebWallpaperWindowCompositionTests` reads the policy accepted by WindowServer
+for an unordered, asset-free web window, including after AppKit's live-resize
+cycle, and checks that applying it preserves other window tags. It also reads
+the Metal background image queue to distinguish a submitted frame from an
+empty layer, verifies that resizing preserves its 1×1 backing and web-view
+layout, keeps it during page suspension and resume, and checks that the page
+still attaches over black when Metal is unavailable. It never opens a desktop window and does not claim to observe
+visible transition frames.
 Show Desktop and Space transition smoothness,
 real hover and window-server routing on a desktop, how flicks and parallax pages feel
 with a real high-rate mouse, that the hover exit still lands after the last move,
@@ -514,7 +741,10 @@ WebContent savings on WebGL, Spine and three.js pages (an A/B with
 that mix it into CSS pixel math also need an authorized desktop run. So does a real
 smoothing visualizer (bars that decay per callback) after the system audio stops, and
 a comparison with Wallpaper Engine's own behavior in silence if a Windows reference is
-ever available. A real Workshop page that hosts its player in an iframe needs an authorized
+ever available. Whether the on-screen compositor lifts a page's `<video>` the way the
+offscreen snapshot does (see Limits), and what the native video player's `AVPlayerLayer`
+does with the same clips, need an authorized desktop run. A real Workshop page that hosts
+its player in an iframe needs an authorized
 desktop run, as does a page that makes its local requests from a worker. That
 Safari's Develop menu lists a desktop wallpaper page and attaches to it in a release
 build, and drops it again when the switch goes off, also needs one.

@@ -53,11 +53,12 @@ not whether the content happens to differ.
 Capture is rebuilt when the default output device changes, for example when
 headphones or a USB audio interface are connected or removed. The change is
 reported after 300 ms without further changes, so a Bluetooth device that
-announces a switch several times produces one rebuild. Only a running tap is
-rebuilt: nothing happens while capture is stopped, paused or waiting for
-permission, and a paused display starts a tap on the current device when it
-resumes. A rebuild never asks for permission again. The app watches for the change
-only while capture is wanted, from the moment a scene that reads audio or a web page
+announces a switch several times produces one rebuild. Only a running tap or its
+pending recovery is rebuilt: device changes never start a cleanly stopped tap or
+one waiting for its first permission grant. A paused display starts a tap on the
+current device when it resumes. A rebuild never asks for permission again. The app
+watches for the change only while capture is wanted, from the moment a scene that
+reads audio or a web page
 starts it until the last one stops or capture is suspended, so a Mac whose wallpapers
 never read audio has no watcher and a device switch writes nothing to the log.
 
@@ -68,6 +69,31 @@ could not be rebuilt, and it starts again at the next scene or demand change; no
 alert is shown. These steps are written to the application log with the
 `[wallpaper-core audio]` prefix. While the tap is down, the analysis treats the
 input as stale after 250 ms and the spectrum falls to zero.
+
+A tap that stops delivering is rebuilt too. A tap can stop calling back without
+any device change, for example after sleep or a hiccup of the system audio
+service. While a tap runs, the audio worker checks once a second how many times
+it has called back. A healthy tap keeps calling back with silence when nothing
+plays, so only missing calls count, never quiet samples. After 3 seconds without
+a call while the default output device is running, the tap is rebuilt the same
+way as for a device change, with the same retries; a device change that arrives
+in the meantime replaces them. While the output device is idle no call is expected,
+so nothing is rebuilt. At most 3 of these rebuilds happen within a minute: a
+fourth stall leaves the tap alone until the next scene or demand change, and the
+log says so once. The log also records each stall rebuild and the first call
+after one. The check runs only while capture is wanted and a tap is running, so a
+paused or suspended display, a stopped tap or a Mac whose wallpapers never read
+audio has none, and a rebuild never asks for permission.
+
+Healthy capture and unfinished teardown are tracked separately. A failed callback,
+aggregate-device or tap release retains its resources for retry but does not report
+usable capture. Disabling demand retries remaining cleanup; reactivation or a rebuild
+finishes that cleanup before creating another tap, without repeating successful
+release operations. Permission is checked before starting a replacement, and repeated
+healthy demand keeps the same tap. A failed suspension restores the previous desired
+demand and attempts to restore actual capture; if cleanup prevents that rollback, the
+error includes both failures. Removed scenes stay removed, even if teardown fails.
+The scene/demand and rebuild retry paths recover capture when cleanup later succeeds.
 
 ## What wallpapers receive
 
@@ -89,6 +115,12 @@ Its exact formula is not published; where this differs, it is an estimate.
 - Every spectrum stands alone. Wallpaper Engine leaves smoothing to the
   wallpaper, so a visualizer that smooths in its script looks as intended and
   one that does not jumps from frame to frame, as it does there.
+- A scene frame reads one spectrum, as Wallpaper Engine's do: the first read of a
+  frame takes the newest analysis, and every shader pass, particle emitter or
+  operator and script of that frame gets that same one, even when the analysis
+  publishes the next spectrum while the frame is drawn
+  (`ShaderUpdaterAudio.AFrameReadsOneSpectrumWhateverTheAnalysisPublishesMeanwhile`).
+  Turning audio response on or off takes effect with the next frame.
 
 Scenes receive the values as analysed; web pages receive them clamped to 0.0–1.0 (see
 [Web wallpapers](web-wallpapers.md#audio-response)).
@@ -100,7 +132,7 @@ Scenes receive the values as analysed; web pages receive them clamped to 0.0–1
 | Shader spectrum effects | Authored audio-reactive shaders |
 | Web `wallpaperRegisterAudioListener()` | 64 bands per channel, one shared delivery pump capped at 30 Hz; a cleared spectrum keeps arriving through silence (every poll for 1.5 s, then once a second) so pages that smooth per callback finish decaying ([details](web-wallpapers.md#audio-response)) |
 | SceneScript `engine.registerAudioBuffers()` | 16, 32 and 64 bands |
-| Particle emitters | Box and sphere emitters with audio frequency, bounds and exponent settings |
+| Particle emitters and operators | Box and sphere emitters, and the `turbulence` and `vortex` operators, with audio frequency, bounds and exponent settings; a scene that has any of them captures audio |
 
 ## Non-goals
 
@@ -114,7 +146,11 @@ Synthetic offscreen checks cover the analysis against tone measurements
 shader color and SceneScript scale. Device-free controller and bridge tests cover web-only
 capture startup, permission, shared ownership, suspension and shutdown, and the
 [output device rebuild](#output-device-changes): the debounce, the controller restart,
-the retry delays and superseded retries. Offscreen WebKit tests cover listener
+the retry delays and superseded retries. They also drive the stall watch through the
+real I/O callback with an injected clock: silence, an idle output device and
+suspension never rebuild, a tap without calls is rebuilt once after 3 seconds and at
+most 3 times a minute, a device change supersedes a stall rebuild's retries, and the
+worker checks only while a counted tap is wanted. Offscreen WebKit tests cover listener
 delivery. Live capture and desktop behavior require a separately authorized manual
-check; that includes the CoreAudio listener itself and a real device switch, which no
-unit test can exercise.
+check; that includes the CoreAudio listener itself, a real device switch and a tap
+that really stops calling back, which no unit test can exercise.

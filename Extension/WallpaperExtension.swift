@@ -209,10 +209,14 @@ private struct NativeWallpaperConfiguration: AppExtensionConfiguration {
     // Counted before the connection resumes, so a pending idle exit cannot end
     // the process under it; the close always follows on the main queue.
     WallpaperController.idleExit.connectionOpened()
+    WallpaperRuntime.recordHostRelease(false)
     let pid = connection.processIdentifier
     connection.invalidationHandler = {
       DispatchQueue.main.async {
         WallpaperController.idleExit.connectionClosed()
+        if WallpaperController.idleExit.openConnections == 0 {
+          WallpaperRuntime.recordHostRelease(true)
+        }
         // served=0 is a connection that opened and closed without asking for anything.
         WallpaperRuntime.log(
           "Connection closed pid=\(pid) served=\(trace.served) "
@@ -232,18 +236,6 @@ final class WallpaperMachineExtension: NSObject, AppExtension {
     super.init()
     do {
       try WallpaperRuntime.load()
-      if ProcessInfo.processInfo.environment["VK_ICD_FILENAMES"] == nil {
-        // Packaged apps provide this resource. Local Homebrew builds use the same
-        // installed ICD as scripts/build.py without relying on shell environment.
-        let bundled = Bundle.main.url(forResource: "MoltenVK_icd", withExtension: "json")
-        let homebrew = URL(
-          fileURLWithPath: "/opt/homebrew/opt/molten-vk/etc/vulkan/icd.d/MoltenVK_icd.json")
-        if let url = bundled
-          ?? (FileManager.default.isReadableFile(atPath: homebrew.path) ? homebrew : nil)
-        {
-          setenv("VK_ICD_FILENAMES", url.path, 1)
-        }
-      }
       DispatchQueue.main.async { WallpaperController.shared.start() }
       WallpaperRuntime.log(
         "Native wallpaper extension started: bundle=\(Bundle.main.bundleURL.path) configurationVersion=\(LockScreenConfiguration.supportedVersion)")

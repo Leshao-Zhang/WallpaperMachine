@@ -1,12 +1,16 @@
-# The new-issue chooser. Blank issues stay on: the app's "Not working? Report on
-# GitHub" opens /issues/new with the title and body filled in (issueLink in
-# WebUI/panel.js), and with blank issues off GitHub would send it here instead,
-# losing both.
+# The new-issue chooser. The app's "Not working? Report on GitHub" opens the bug
+# report form (ExternalLink.newIssue in App/Views/ControlPanel/Model/), but 1.6.0 and
+# earlier open /issues/new with the title and body filled in. Blank issues stay on
+# for them: with blank issues off GitHub would send those links here instead,
+# losing both. Turn them off once those versions are rare.
 blank_issues_enabled: true
 contact_links:
   - name: Question or help
     url: https://github.com/WallpaperMachine/WallpaperMachine/discussions/categories/q-a
     about: Ask how to install, set up or use WallpaperMachine.
+  - name: Discord
+    url: https://mmfoundation.dev/discord
+    about: Talk with the people who make and use WallpaperMachine on MMFoundation's Discord.
   - name: Install guide
     url: https://www.wallpapermachine.app/guides/install/
     about: From the download to the first-run guide, including Open Anyway on first launch.

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 
 /// WallpaperMachine keeps imports separate from Steam's installation and never edits source wallpapers.
 enum ClientPaths {
@@ -11,7 +12,40 @@ enum ClientPaths {
             .appendingPathComponent("Library/Application Support/WallpaperMachine", isDirectory: true)
     }
 
-    static var libraryURL: URL { supportURL.appendingPathComponent("Library", isDirectory: true) }
+    /// The folder that holds the library and the downloads (`StorageLocation`): the app-support
+    /// folder unless they were moved. While a chosen folder is missing this is still that folder,
+    /// never the app-support one, so nothing fills a new library on this Mac meanwhile; `prepare`
+    /// refuses to start the library then.
+    static var storageURL: URL {
+        switch storageResolution {
+        case .support: return supportURL
+        case .chosen(let url): return url
+        case .unavailable(let location?): return location.url
+        // Nothing to name: a folder no one may write to, so nothing is created anywhere.
+        case .unavailable(nil): return URL(fileURLWithPath: "/var/empty/WallpaperMachine", isDirectory: true)
+        }
+    }
+
+    /// Read once per app-support folder (tests move it with `WALLPAPER_MACHINE_HOME`). The choice
+    /// changes only at launch, before anything reads it, and `reloadStorageLocation` follows it.
+    static var storageResolution: StorageLocation.Resolution {
+        let support = supportURL.path
+        return storageCache.withLock { cached in
+            if let cached, cached.support == support { return cached.resolution }
+            let resolution = StorageLocation.resolve(support: URL(fileURLWithPath: support, isDirectory: true))
+            cached = (support, resolution)
+            return resolution
+        }
+    }
+
+    static func reloadStorageLocation() {
+        storageCache.withLock { $0 = nil }
+    }
+
+    private static let storageCache = OSAllocatedUnfairLock<(support: String, resolution: StorageLocation.Resolution)?>(
+        initialState: nil)
+
+    static var libraryURL: URL { storageURL.appendingPathComponent("Library", isDirectory: true) }
     static var managedAssetsURL: URL { supportURL.appendingPathComponent("SceneAssets", isDirectory: true) }
     /// Where user-picked `file`/`directory` property assets are kept for good.
     ///
@@ -20,59 +54,91 @@ enum ClientPaths {
     /// Steam workshop tree, so deleting or re-downloading a wallpaper cannot take
     /// the user's imported files with it.
     static var userAssetsURL: URL { supportURL.appendingPathComponent("UserAssets", isDirectory: true) }
+    /// Scene scripts' `localStorage`, one folder per wallpaper ID (user data, never a cache).
+    static var sceneStorageURL: URL { supportURL.appendingPathComponent("SceneStorage", isDirectory: true) }
+    /// The defaults key of the assets folder the user picked (`configureAssetsFolder`).
+    static let assetsPathKey = "WallpaperMachineAssetsPath"
     static var assetsURL: URL {
-        if let configured = ClientPreferences.defaults.string(forKey: "WallpaperMachineAssetsPath"), !configured.isEmpty {
-            let url = URL(fileURLWithPath: configured, isDirectory: true)
+        if let chosen = ClientPreferences.defaults.string(forKey: assetsPathKey), !chosen.isEmpty {
+            let url = URL(fileURLWithPath: chosen, isDirectory: true)
             if hasSceneAssets(at: url) { return url }
         }
-        let installed = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            "Library/Application Support/Steam/steamapps/common/wallpaper_engine/assets", isDirectory: true)
-        let candidates = [managedAssetsURL, installed,
-                          supportURL.appendingPathComponent("Steam/steamapps/common/wallpaper_engine/assets")]
-        return candidates.first(where: { hasSceneAssets(at: $0) }) ?? managedAssetsURL
+        let steamInstall = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Steam/steamapps/common/wallpaper_engine/assets", isDirectory: true)
+        let supportCopy = supportURL
+            .appendingPathComponent("Steam/steamapps/common/wallpaper_engine/assets", isDirectory: true)
+        // None usable: the managed folder, so an install knows where to write.
+        return [managedAssetsURL, steamInstall, supportCopy].first { hasSceneAssets(at: $0) } ?? managedAssetsURL
     }
     static var managedSteamCMDURL: URL { supportURL.appendingPathComponent("SteamCMD", isDirectory: true) }
     /// Performance data waiting to be sent, kept only while sending is on (docs/features/telemetry.md).
     static var telemetryURL: URL { supportURL.appendingPathComponent("Telemetry", isDirectory: true) }
+    /// The posters installed as the macOS desktop picture and the journal of the originals they
+    /// replaced (docs/features/desktop-picture.md).
+    static var desktopPostersURL: URL { supportURL.appendingPathComponent("DesktopPosters") }
+    /// What running scenes last reported about being drawn, for the Compatibility card.
+    static var sceneDrawVerdictsURL: URL { supportURL.appendingPathComponent("SceneDrawVerdicts.json") }
+    /// Each wallpaper's measured energy use.
+    static var energyRatingsURL: URL { supportURL.appendingPathComponent("EnergyRatings.json") }
+    /// A wallpaper's saved settings file: its properties, framing and engine options.
+    static func wallpaperSettingsURL(wallpaperID: String) -> URL {
+        supportURL.appendingPathComponent("wallpapers", isDirectory: true).appendingPathComponent(wallpaperID + ".json")
+    }
     /// Everything below is rebuilt on demand, so it stays out of Time Machine.
     static var cacheURL: URL { supportURL.appendingPathComponent("Cache", isDirectory: true) }
     static var thumbnailCacheURL: URL { cacheURL.appendingPathComponent("WorkshopThumbnails", isDirectory: true) }
     static var pixivThumbnailCacheURL: URL { cacheURL.appendingPathComponent("PixivThumbnails", isDirectory: true) }
     /// Still covers of the installed wallpapers' own preview files, for the Installed grid.
     static var libraryThumbnailCacheURL: URL { cacheURL.appendingPathComponent("LibraryThumbnails", isDirectory: true) }
+    /// The last poster of each wallpaper a desktop Space is set to, for desktops not visited yet.
+    static var spacePosterCacheURL: URL { cacheURL.appendingPathComponent("SpacePosters", isDirectory: true) }
+    /// The settled poster each wallpaper last had on each display, for a wallpaper that comes back.
+    static var settledPosterCacheURL: URL { cacheURL.appendingPathComponent("SettledPosters", isDirectory: true) }
     /// The saved Steam sign-in. Kept out of backups so a token never travels to a backup drive.
     static func steamSessionURL(in support: URL = supportURL) -> URL {
         support.appendingPathComponent("SteamSession", isDirectory: true)
     }
-    /// Partial downloads kept for later, with the queue that names them. Its sibling
-    /// `Downloads/workshop-requests.json` is tiny and stays backed up.
-    static func workshopDownloadsURL(in support: URL = supportURL) -> URL {
-        support.appendingPathComponent("Downloads/Workshop", isDirectory: true)
+    /// Partial downloads kept for later, with the queue that names them, beside the library so a
+    /// resumed download lands on its disk. `Downloads/workshop-requests.json` is tiny, stays in
+    /// app support and stays backed up.
+    static func workshopDownloadsURL(in storage: URL = storageURL) -> URL {
+        storage.appendingPathComponent("Downloads/Workshop", isDirectory: true)
     }
 
     static func prepare() throws {
+        if case .unavailable(let location) = storageResolution { throw StorageUnavailableError(location: location) }
         try FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true)
         prepareExcludedFolders()
-        let starter = libraryURL.appendingPathComponent("starter-aurora", isDirectory: true)
-        let starterMarker = supportURL.appendingPathComponent(".starter-installed")
-        if !FileManager.default.fileExists(atPath: starterMarker.path),
-           !FileManager.default.fileExists(atPath: starter.path),
-           let bundled = Bundle.main.url(forResource: "StarterWallpaper", withExtension: nil) {
-            let pending = supportURL.appendingPathComponent(".starter-\(UUID().uuidString)", isDirectory: true)
-            defer { try? FileManager.default.removeItem(at: pending) }
-            try FileManager.default.copyItem(at: bundled, to: pending)
-            try FileManager.default.moveItem(at: pending, to: starter)
-        }
-        // Remember installation so deleting the starter does not restore it on launch.
-        if FileManager.default.fileExists(atPath: starter.path),
-           !FileManager.default.fileExists(atPath: starterMarker.path) {
-            try Data().write(to: starterMarker, options: .atomic)
-        }
+        installStarterWallpaper()
         setenv("WALLPAPER_MACHINE_SUPPORT_ROOT", supportURL.path, 1)
         setenv("WALLPAPER_MACHINE_LIBRARY_ROOT", libraryURL.path, 1)
-        setenv("WALLPAPER_MACHINE_ASSETS_ROOT", assetsURL.path, 1)
+        exportAssetsRoot(assetsURL)
         setenv("WALLPAPER_MACHINE_USER_ASSETS_ROOT", userAssetsURL.path, 1)
         setenv("WALLPAPER_MACHINE_BUILD", buildStamp(), 1)
+    }
+
+    /// Puts the bundled sample wallpaper into the library exactly once. The marker outlives the
+    /// folder, so a user who deletes the sample never gets it back.
+    private static func installStarterWallpaper(bundle: Bundle = .main) {
+        let fileManager = FileManager.default
+        let marker = libraryURL.appendingPathComponent(".starter-installed")
+        let destination = libraryURL.appendingPathComponent("starter-aurora", isDirectory: true)
+        guard !fileManager.fileExists(atPath: marker.path) else { return }
+        if fileManager.fileExists(atPath: destination.path) {
+            // An older library that has the folder but not the marker.
+            try? Data().write(to: marker, options: .atomic)
+            return
+        }
+        guard let resource = bundle.url(forResource: "StarterWallpaper", withExtension: nil) else { return }
+        let pending = storageURL.appendingPathComponent(".starter-pending-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: pending) }
+        do {
+            try fileManager.copyItem(at: resource, to: pending)
+            try fileManager.moveItem(at: pending, to: destination)
+            try? Data().write(to: marker, options: .atomic)
+        } catch {
+            AppLog.warn("could not install the starter wallpaper: \(error.localizedDescription)")
+        }
     }
 
     /// Names the running build for the renderer's load journal, which releases
@@ -127,12 +193,15 @@ enum ClientPaths {
     }
 
     static func hasSceneAssets(at url: URL) -> Bool {
-        // These are referenced by the renderer's built-in image and effect materials.
-        ["shaders/genericimage2.vert", "shaders/genericimage2.frag", "materials/util/effectpassthrough.json"].allSatisfy { path in
-            let file = url.appendingPathComponent(path)
-            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
-                  values.isRegularFile == true, (values.fileSize ?? 0) > 0 else { return false }
-            return FileManager.default.isReadableFile(atPath: file.path)
+        let required = ["shaders/genericimage2.vert", "shaders/genericimage2.frag",
+                        "materials/util/effectpassthrough.json"]
+        let fileManager = FileManager.default
+        return required.allSatisfy { relative in
+            let path = url.appendingPathComponent(relative).path
+            guard let attributes = try? fileManager.attributesOfItem(atPath: path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  (attributes[.size] as? NSNumber)?.intValue ?? 0 > 0 else { return false }
+            return fileManager.isReadableFile(atPath: path)
         }
     }
 
@@ -140,7 +209,12 @@ enum ClientPaths {
         guard hasSceneAssets(at: url) else {
             throw WorkshopFailure(message: String(localized: "This folder does not contain Wallpaper Engine’s shared shaders and materials. Choose its complete assets folder, or install scene assets through Steam."))
         }
-        ClientPreferences.defaults.set(url.path, forKey: "WallpaperMachineAssetsPath")
+        ClientPreferences.defaults.set(url.path, forKey: assetsPathKey)
+        exportAssetsRoot(url)
+    }
+
+    /// Tells the renderer, through its environment, which shared scene resources to load.
+    static func exportAssetsRoot(_ url: URL) {
         setenv("WALLPAPER_MACHINE_ASSETS_ROOT", url.path, 1)
     }
 
@@ -149,10 +223,12 @@ enum ClientPaths {
             throw WorkshopFailure(message: String(localized: "Steam did not produce complete scene assets. Confirm this account owns Wallpaper Engine and retry. Existing assets have not been changed."))
         }
         try Task.checkCancellation()
-        if FileManager.default.fileExists(atPath: destination.path) {
-            _ = try FileManager.default.replaceItemAt(destination, withItemAt: source)
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: source)
         } else {
-            try FileManager.default.moveItem(at: source, to: destination)
+            try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fileManager.moveItem(at: source, to: destination)
         }
     }
 }

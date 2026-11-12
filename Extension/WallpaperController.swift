@@ -35,6 +35,9 @@ final class WallpaperController {
       (NSWorkspace.screensDidWakeNotification, "display wake"),
       (NSWorkspace.willSleepNotification, "system sleep"),
       (NSWorkspace.didWakeNotification, "system wake"),
+      // Fast user switching moves the screens to another session without a lock.
+      (NSWorkspace.sessionDidResignActiveNotification, "session switched away"),
+      (NSWorkspace.sessionDidBecomeActiveNotification, "session active"),
     ] {
       observers.append(
         workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -108,7 +111,7 @@ final class WallpaperController {
       Self.record(
         LockScreenReadiness(
           revision: configuration.revision, displayID: scene.displayID,
-          error: (error ?? readyError)?.localizedDescription))
+          error: (error ?? readyError)?.localizedDescription, held: surface.heldNotice))
     }
   }
 
@@ -123,6 +126,8 @@ final class WallpaperController {
   }
 
   private static func record(_ readiness: LockScreenReadiness) {
+    var readiness = readiness
+    readiness.processID = getpid()
     do {
       let data = try JSONEncoder().encode(readiness)
       try data.write(

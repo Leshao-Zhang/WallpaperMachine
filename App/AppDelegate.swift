@@ -3,26 +3,42 @@ import Combine
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
-    private var statusItem: NSStatusItem?
-    private var controlPanelWindow: NSWindow?
-    private var whatsNewWindow: NSWindow?
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    var statusItem: NSStatusItem?
+    /// The status item's menu, filled from `StatusMenuModel` each time it opens. A right click or a
+    /// Control-click on the icon opens it, and a left click too when Settings › General says so.
+    var statusMenu: NSMenu?
+    /// The panel a left click on the status item opens (`AppDelegate+StatusPanel`).
+    private(set) lazy var statusPanel = StatusPanelPopover(source: self)
+    var statusItemClickObserver: NSObjectProtocol?
+    /// The menu bar's Wallpaper menu, filled from `StatusMenuModel` each time it opens.
+    var wallpaperMenu: NSMenu?
+    private(set) var controlPanelWindow: NSWindow?
     private var previewWindow: WallpaperPreviewWindowController?
-    private lazy var whatsNewStore = WhatsNewStore()
-    private let controlPanelNavigation = ControlPanelNavigation()
-    private lazy var workshopStore = WorkshopStore()
+    let controlPanelNavigation = ControlPanelNavigation()
+    private(set) lazy var workshopStore = WorkshopStore()
     private lazy var pixivStore = PixivStore()
     private lazy var libraryImports = LibraryImportStore()
     /// Files handed to the app before it finished launching, imported once it has.
     private var pendingOpenedFiles: [URL] = []
     private var finishedLaunching = false
-    private lazy var appUpdater = AppUpdateStore()
-    private var automaticUpdates: Task<Void, Never>?
-    /// The version the unattended check last prompted for ("Later" holds until the next launch)
-    /// and whether a prompt is waiting for wallpapers to present again.
-    private var updatePrompts = UpdatePromptLedger()
+    private(set) lazy var updates = AppUpdateCoordinator(
+        updater: AppUpdateStore(),
+        isShuttingDown: { [weak self] in
+            guard let self else { return true }
+            return self.shutdownInProgress || self.shutdownComplete
+        },
+        isUnattended: { [weak self] in self?.presentationPolicy?.isUnattended == true },
+        menuChanged: { [weak self] in self?.rebuildMenu() },
+        showAbout: { [weak self] in self?.showAboutSettings() },
+        // The automatic update loop asks the Workshop too, since the app can run for weeks.
+        beforeAutomaticCheck: { [weak self] in self?.checkWorkshopUpdatesIfDue() },
+        windowClosed: { [weak self] in self?.leaveDockUnlessAWindowIsOpen() })
     private var displayChangeObserver: NSObjectProtocol?
     private var powerOffObserver: NSObjectProtocol?
+    /// Follows the drive of a library kept on another disk: stops its wallpapers when it goes, plays
+    /// them when it returns, and opens a library the app launched without.
+    private var libraryDrive: StorageVolumeMonitor?
     /// Set when macOS announces a logout, restart or shutdown, ahead of the quit event.
     private var powerOffNotice = PowerOffNotice()
     private lazy var displayRefresh = DisplayRefreshCoalescer(displayReturned: { [weak self] in
@@ -37,50 +53,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let self else { return false }
         return await self.refreshDisplaysFromSystemEvent()
     }
-    private var desktopWallpaperSync: DesktopWallpaperSync?
+    var desktopWallpaperSync: DesktopWallpaperSync?
     private var desktopMediaSession: DesktopMediaSession?
     private var sceneMediaSink: SceneMediaSink?
-    private var webWallpaperHost: WebWallpaperHost?
-    private var nativeVideoHost: NativeVideoWallpaperHost?
+    private(set) var webWallpaperHost: WebWallpaperHost?
+    private(set) var nativeVideoHost: NativeVideoWallpaperHost?
     private var wallpaperHosts: WallpaperHosts {
         WallpaperHosts(web: webWallpaperHost, native: nativeVideoHost)
     }
-    private var presentationPolicy: WallpaperPresentationPolicy?
+    private(set) var presentationPolicy: WallpaperPresentationPolicy?
     /// Keeps the previous picture on screen while a switched wallpaper loads.
     private var switchHold: WallpaperSwitchHold?
     private var windowAuditor: WallpaperWindowAuditor?
+    /// Settings › Desktop & Lock Screen › Hide the notch.
+    private var notchMask: NotchMaskController?
+    /// Keeps the windows of a display that follows desktop Spaces on its current desktop only.
+    private(set) var spacePinning: WallpaperSpacePinning?
+    private var spaceParking: WallpaperSpaceParking?
+    private(set) var spaceReplicas: WallpaperSpaceReplicas?
+    /// The last poster of each wallpaper a desktop Space is set to, for the desktops not on screen.
+    let spacePosters = DesktopSpacePosterCache()
+    /// The settled poster each wallpaper last had on each display, given back when it returns.
+    /// Made when the first poster sync starts (`makeSettledPosters`), which empties what an
+    /// earlier run left.
+    var settledPosters: DesktopSettledPosterStore?
+    /// The library the settled posters were last trimmed to.
+    var settledPosterLibrary: Set<String>?
+    var retainedSpacePosters: Set<DesktopSpacePosterCache.Key>?
     private var wakeRevalidator: SystemWakeRevalidator?
     private var memoryPressureMonitor: MemoryPressureMonitor?
     private var appRuleMonitor: AppRuleMonitor?
     private var otherAudioMonitor: OtherAudioMonitor?
     private var systemConditionMonitor: SystemConditionMonitor?
     private var powerSourceMonitor: PowerSourceMonitor?
+    /// The source `powerSourceChanged` last heard, so a change can tell what it left.
+    private var reportedPowerSource: PowerSourceMonitor.Source?
     private var powerSourceRefresh: Task<Void, Never>?
     private var activeDisplayTracker: ActiveDisplayTracker?
     private var playlistScheduler: PlaylistScheduler?
-    private var automaticWallpapers: WallpaperAutomationController?
-    private var desktopSpaces: WallpaperSpaceMonitor?
+    private(set) var automaticWallpapers: WallpaperAutomationController?
+    private(set) var desktopSpaces: WallpaperSpaceMonitor?
     private var powerSourceResampler: PowerSourceResampler?
-    private var posterRefreshTask: Task<Void, Never>?
+    var posterRefreshTask: Task<Void, Never>?
+    var pendingPosterCapture = DesktopWallpaperSync.CaptureRequest.none
     /// Putting the user's own desktop picture back after the Settings switch went off, or after
     /// a poster was found left behind.
-    private var restoringDesktopPicture: Task<Void, Never>?
+    var restoringDesktopPicture: Task<Void, Never>?
     /// A restore has run since a poster could last have been written, whether it worked or not.
     /// It is not tried again until the switch is turned on again or the lock screen hands the
     /// desktop back; a failed one is retried by quitting, which keeps its suspended sync.
-    private var desktopPictureRestoreSettled = false
+    var desktopPictureRestoreSettled = false
     private var globalHotKeys: GlobalHotKeys?
     private var playbackPreferencesObserver: NSObjectProtocol?
     private var wallpaperEnergy: WallpaperEnergyRecorder?
+    /// The scene reports last handed to `BridgeStore.sceneDrawVerdicts`.
+    private var recordedSceneReports: [BridgeSceneBackendReport] = []
     private var telemetry: TelemetryService?
+    private var activeCount: TelemetryActiveCount?
     /// Last presentation the bridge accepted, so leaving unloaded clears that flag first.
     private var appliedGlobalPresentation: GlobalPresentation = .running
-    private var store: BridgeStore?
-    private var startupError: Error?
-    private var lastError: Error?
-    private var playbackSnapshotCurrent = false
-    private var shutdownInProgress = false
-    private var shutdownComplete = false
+    private(set) var store: BridgeStore?
+    private(set) var startupError: Error?
+    var lastError: Error?
+    private(set) var playbackSnapshotCurrent = false
+    private(set) var shutdownInProgress = false
+    private(set) var shutdownComplete = false
     /// Teardown stages the quit gave up waiting for, so the exit fuse is shorter and the
     /// session ledger does not call the run a clean quit.
     private var stalledQuitStages: [String] = []
@@ -94,13 +131,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// The signal that asked for the quit being requested, until `applicationShouldTerminate`
     /// reads it. Cleared when a quit is refused, so a later Quit is not taken for the signal's.
     private var terminationSignal: Int32?
+    /// Set while the app's own Quit or Exit runs `terminate`, so the quit line can say so.
+    var quitChosenFromMenu = false
+    let terminateApplication: @MainActor () -> Void
     private var themeSubscription: AnyCancellable?
     private var iconSubscription: AnyCancellable?
     private var diagnostics: RuntimeDiagnosticsSession?
 
+    init(terminateApplication: @escaping @MainActor () -> Void = { NSApp.terminate(nil) }) {
+        self.terminateApplication = terminateApplication
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hosted unit tests need the executable's types, not its desktop lifecycle.
-        // UI tests run in a separate runner, so the real app still starts normally.
+        // Hosted unit tests need these types but not the desktop lifecycle, so they get no
+        // windows, no status item and no services. The UI tests run in a separate runner process,
+        // which is why the real app starts there.
         if NSClassFromString("XCTestCase") != nil {
             NSApp.setActivationPolicy(.prohibited)
             return
@@ -109,22 +155,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         themeSubscription = AppThemeStore.shared.$preferences
             .map(\.mode).removeDuplicates()
             .sink { mode in NSApp.appearance = mode.appearance }
+        // A season's icon stands in for the chosen one while the season is on.
         iconSubscription = AppThemeStore.shared.$preferences
-            .map(\.icon).removeDuplicates()
-            .sink { icon in
+            .combineLatest(AppThemeStore.shared.$season)
+            .map { preferences, season in season?.dockImageName ?? preferences.icon.imageName }
+            .removeDuplicates()
+            .sink { name in
                 do {
-                    NSApp.applicationIconImage = try icon.image()
+                    NSApp.applicationIconImage = try AppThemePreferences.dockImage(named: name)
                 } catch {
-                    AppLog.error("Dock icon \(icon.rawValue) could not load: \(error.localizedDescription)")
+                    AppLog.error("Dock icon \(name) could not load: \(error.localizedDescription)")
                 }
             }
         AppLog.info("startup: didFinishLaunching start")
-        BridgeEnvironment.configureVulkanICDIfNeeded()
-        AppLog.info("startup: vulkan icd configured")
+        openLibrary()
+        startShell()
+        startLibraryServices()
+        finishLaunching(launchEvent: launchEvent)
+    }
+
+    /// Opens the library and the renderer bridge over it: at launch, and again when the drive the
+    /// app launched without is connected (`openLibraryAfterLaunch`). When either cannot start,
+    /// `store` stays nil and `startupError` says why.
+    private func openLibrary() {
         do {
             try ClientPaths.prepare()
             let created = try BridgeStore()
             store = created
+            created.sceneDrawVerdicts = SceneDrawVerdicts(file: ClientPaths.sceneDrawVerdictsURL)
             created.openPreview = { [weak self] selection in self?.showWallpaperPreview(selection) }
             created.onPropertyDraftChanged = { [weak self] id in self?.previewWindow?.session.propertiesDidChange(wallpaperID: id) }
             created.onPropertyDragged = { [weak self] id in
@@ -149,6 +207,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     AppLog.warn("import: \(id) was replaced but could not be reloaded: \(error.localizedDescription)")
                 }
             }
+            // Videos imported before imports made a preview show an empty tile until they have one.
+            let library = ClientPaths.libraryURL
+            Task(priority: .utility) { [weak created] in
+                guard !(await WallpaperImportService().addMissingVideoPreviews(in: library)).isEmpty else { return }
+                do { try await created?.refreshLibraryAsync() } catch {
+                    AppLog.warn("library: rescan after adding video previews failed: \(error.localizedDescription)")
+                }
+            }
             for line in DiagnosticEnvironment.current() { AppLog.info("environment: \(line)") }
             startupError = nil
             playbackSnapshotCurrent = false
@@ -159,39 +225,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             startupError = error
             playbackSnapshotCurrent = false
         }
+    }
+
+    /// What a launch starts once, whether or not the library opened.
+    private func startShell() {
         pixivStore.restoreSession()
-        // A crash during a download leaves its staging behind, holding the whole downloaded item.
-        let stagingRoot = ClientPaths.supportURL
-        let pixivStagingRoot = PixivWallpaperPackager.stagingRoot(forLibrary: ClientPaths.libraryURL)
-        let importStagingRoot = WallpaperImportService.stagingRoot(forLibrary: ClientPaths.libraryURL)
-        Task.detached(priority: .utility) {
-            WorkshopDownloader.removeAbandonedStaging(in: stagingRoot)
-            PixivWallpaperPackager.removeAbandonedStaging(in: pixivStagingRoot)
-            WallpaperImportService.removeAbandonedStaging(in: importStagingRoot)
-        }
+        workshopStore.restoreSteamWebSession()
+        // Follows the Mac for Automatic sunrise and sunset. It asks for nothing here: access is
+        // requested only from an explicit action in the panel.
+        SolarLocationTracker.shared.start()
+        AppLog.info("startup: solar location tracker started")
+        removeAbandonedStaging()
+        // A moved library leaves its old copy to delete too.
+        let support = ClientPaths.supportURL
+        Task.detached(priority: .utility) { StorageMoveService.removeRetiredCopies(support: support) }
 
         NSApp.setActivationPolicy(.accessory)
         AppLog.info("startup: activation policy set to accessory")
+        WebSignInWindowController.onClosed = { [weak self] in self?.leaveDockUnlessAWindowIsOpen() }
         installStatusItem()
         synchronizeStatusItem()
         installDisplayChangeObserver()
         AppLog.info("startup: display change observer installed")
         installPowerOffObserver()
+        startLibraryDriveMonitor()
         installApplicationMenu()
         AppLog.info("startup: application menu installed")
+        // Keeps no window and does no work until Hide the notch is turned on.
+        let notchMask = NotchMaskController()
+        self.notchMask = notchMask
+        notchMask.start()
+    }
+
+    /// Starts every service that works over the opened library, then loads it: at launch, and
+    /// once more if the library opens later (`openLibraryAfterLaunch`). Without a library it only
+    /// says so.
+    private func startLibraryServices() {
         if let store {
             workshopStore.startDownloadLifecycle(bridge: store)
             let lockScreen = LockScreenConfiguration.isSupportedBySystem
-                ? LockScreenWallpaperService(bridge: store.bridge, contentRevision: { [weak store] in store?.wallpaperContentRevision ?? 0 }) : nil
+                ? LockScreenWallpaperService(
+                    bridge: store.bridge, contentRevision: { [weak store] in store?.wallpaperContentRevision ?? 0 }) : nil
             if let lockScreen {
                 store.lockScreenWallpaper = lockScreen
                 lockScreen.beforeActivation = { [weak self] in
                     guard let self else { return }
                     if self.desktopWallpaperSync == nil {
-                        self.desktopWallpaperSync = try DesktopWallpaperSync(
-                            folder: ClientPaths.supportURL.appendingPathComponent("DesktopPosters"))
+                        self.desktopWallpaperSync = try DesktopWallpaperSync(folder: ClientPaths.desktopPostersURL)
                     }
                     self.desktopWallpaperSync?.suspendForNativeProvider()
+                    self.spacePinning?.update()
+                    self.spaceParking?.update()
                 }
                 lockScreen.afterDeactivation = { [weak self] in
                     guard let self, !self.shutdownInProgress else { return }
@@ -200,21 +284,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     // With the switch off, a poster the provider handed back is not kept.
                     self.desktopPictureRestoreSettled = false
                     self.applyDesktopPicturePreference()
+                    self.spacePinning?.update()
+                    self.spaceParking?.update()
                 }
             }
             // Created before the hosts, which take over the picture it keeps on screen once their
             // window opens. Its policy is read when a switch starts, not now, so the policy that
             // is set up further down is still found.
             let hold = WallpaperSwitchHold(
-                layers: { Self.wallpaperLayers(on: $0) },
+                layers: { [weak self] in Self.wallpaperLayers(on: $0, excluding: self?.keptWallpaperWindows() ?? []) },
                 // The rule the poster sync's captures follow: a suspended display is not seen,
                 // and its surface may not answer a request for a frame.
                 shouldHold: { [weak self] display in
-                    guard let policy = self?.presentationPolicy else { return false }
+                    guard let self, let policy = self.presentationPolicy else { return false }
+                    // Bringing back a wallpaper kept paused on this desktop loads nothing, so
+                    // there is no gap to cover and no picture worth taking.
                     return !policy.isSuspended && !policy.suspendedDisplayIDs.contains(display)
+                        && !self.switchResumesKeptWallpaper(on: display)
                 },
-                reduceMotion: { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion })
+                reduceMotion: { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion },
+                // A display hidden while its desktop's wallpaper loads shows no veil to fade.
+                concealed: { [weak self] display in self?.spacePinning?.isConcealed(display) ?? false })
             switchHold = hold
+            // A hidden display is shown again once its successor no longer needs the veil.
+            hold.onReleased = { [weak self] _ in self?.spacePinning?.update() }
             hold.start()
             store.willSwitchWallpaper = { [weak self] displays in await self?.switchHold?.begin(displays: displays) }
             store.didSettleWallpaperSwitch = { [weak self] displays in self?.switchHold?.engineSettled(displays: displays) }
@@ -278,15 +371,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 guard let self, !self.shutdownInProgress else { return }
                 self.presentationPolicy?.evaluate()
                 self.windowAuditor?.windowsMayHaveChanged()
+                self.spacePinning?.update()
                 guard lockScreen?.ownsDesktopProvider != true else { return }
                 do { try self.startDesktopWallpaperSync() } catch {
                     AppLog.error("Desktop poster sync could not be restarted: \(error.localizedDescription)")
                 }
             }
             webHost.start()
-            // The experimental native video backend. The bridge returns nothing
-            // for it unless the user turned it on, so this host opens no window
-            // and starts no player by default.
+            // Plays every plain video. The bridge returns nothing for a library
+            // with no video wallpaper assigned, so this host opens no window and
+            // starts no player then.
             let nativeVideo = NativeVideoWallpaperHost(bridge: store.bridge, switchHold: hold)
             nativeVideoHost = nativeVideo
             nativeVideo.onStateChanged = { [weak store] state in store?.receiveHostState(state) }
@@ -294,14 +388,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self?.lastError = WallpaperActionError(message: message)
                 self?.rebuildMenu()
             }
-            nativeVideo.onSurfacesChanged = { [weak self] in
+            nativeVideo.onSurfacesChanged = { [weak self, weak lockScreen] in
                 guard let self, !self.shutdownInProgress else { return }
                 self.presentationPolicy?.evaluate()
                 self.windowAuditor?.windowsMayHaveChanged()
+                self.spacePinning?.update()
+                guard lockScreen?.claimsDesktopPicture != true else { return }
+                // The host opens and closes its windows after the snapshot that asked for posters,
+                // once it has read the clip: the window that opened is asked for one, and a display
+                // left without a window gets its own picture back.
+                do { try self.startDesktopWallpaperSync(.surfacesChanged) } catch {
+                    AppLog.error("Desktop poster sync could not be restarted: \(error.localizedDescription)")
+                }
             }
             nativeVideo.start()
-            store.onSnapshotApplied = { [weak self, weak lockScreen] in
+            store.onSnapshotApplied = { [weak self, weak lockScreen, weak store] in
                 guard let self, !self.shutdownInProgress else { return }
+                if let store { self.recordSceneDrawVerdicts(store) }
                 // Any engine change (playback, assignment, quality) ends the interval
                 // being measured; its two ends could otherwise match across it.
                 self.wallpaperEnergy?.invalidate()
@@ -313,6 +416,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self.nativeVideoHost?.reconcile()
                 self.presentationPolicy?.evaluate()
                 self.windowAuditor?.windowsMayHaveChanged()
+                self.spacePinning?.update()
+                self.spaceParking?.update()
                 // Play, pause and a changed library or display set are when a waiting playlist
                 // change can happen.
                 self.automaticWallpapers?.scheduler.evaluate()
@@ -320,20 +425,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 if let lockScreen, lockScreen.canRefreshAutomatically {
                     lockScreen.refresh()
                 }
+                self.retainSettledPosters()
                 // Posters keep the desktop unless the native provider has it or an animated lock
                 // screen is on its way to taking it; a screen saver chosen on its own leaves it here.
                 if lockScreen?.claimsDesktopPicture != true {
                     // A suspended poster sync must never outlive the native provider.
-                    do { try self.startDesktopWallpaperSync() } catch {
+                    do { try self.startDesktopWallpaperSync(.snapshot) } catch {
                         self.lastError = error
                         AppLog.error("Desktop poster sync could not be restarted: \(error.localizedDescription)")
                     }
                 }
             }
             let preferences = PlaybackPreferences.shared
-            let appRules = AppRuleMonitor(preferences: preferences)
+            // Pause on battery reads the source the power source monitor last reported (the
+            // system's own until that monitor exists); `powerSourceChanged` refreshes the rules.
+            let appRules = AppRuleMonitor(preferences: preferences, onBattery: { [weak self] in
+                (self?.powerSourceMonitor?.source ?? PowerSourceMonitor.systemSource()) == .battery
+            })
             let otherAudio = OtherAudioMonitor(preferences: preferences)
-            let conditions = SystemConditionMonitor(preferences: preferences, focus: .shared)
+            let conditions = SystemConditionMonitor(preferences: preferences, focus: .shared, state: .shared)
             let activeDisplay = ActiveDisplayTracker()
             appRuleMonitor = appRules
             otherAudioMonitor = otherAudio
@@ -353,16 +463,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     self?.applyDesktopPicturePreference()
                 }
             }
+            // Seed the Space snapshot before presentation first evaluates, including a launch
+            // from a full-screen Space. Later topology changes re-evaluate the policy themselves.
+            let spaces = WallpaperSpaceMonitor.shared
+            desktopSpaces = spaces
+            spaces.start()
             let policy = WallpaperPresentationPolicy(
                 displaySleepAction: { preferences.displaySleepAction },
-                // Low Power Mode, a hot Mac and a Focus filter act exactly as app rules do.
-                appRuleActions: { appRules.actions.union(conditions.actions) },
+                // Low Power Mode, a hot Mac and a Focus filter act exactly as app rules do, and so
+                // does the library's drive going away, as a Stop.
+                appRuleActions: { [weak self] in
+                    appRules.actions.union(conditions.actions).union(self?.libraryDrive?.presentationActions ?? [])
+                },
                 otherAudioActive: { otherAudio.isActive },
                 otherAudioAction: { preferences.otherAudioAction },
+                // Reduce volume: the share of its own volume each wallpaper keeps meanwhile.
+                otherAudioVolume: { Float(preferences.otherAudioVolume) / 100 },
                 // The user's own mute of every wallpaper, on top of the rules above and never
                 // written into any wallpaper's saved sound settings.
                 userMuted: { preferences.wallpapersMuted },
                 desktopCoveredAction: { preferences.desktopCoveredAction },
+                // "When another app is in front" learns from the probes' occlusion that the app in
+                // front minimized or closed the window over the desktop.
+                keepsCoverageProbes: { preferences.otherAppInFrontAction.watchesFrontmostApp },
+                // A translucent wallpaper can play as soon as AppKit shows it in
+                // the incoming desktop preview, before that Space becomes active.
                 // Another display than the one the pointer is on, for those who chose to play only there.
                 inactiveDisplays: { known in
                     preferences.playsOnlyOnActiveDisplay ? activeDisplay.inactive(among: known) : []
@@ -376,12 +501,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                         return
                     }
                     let hostsSuspended = presentation != .running
+                    // Unloading frees memory, which the wallpapers kept for other desktops hold too.
+                    if presentation == .unloaded { self.spaceParking?.setUnloaded(true) }
                     self.webWallpaperHost?.setPresentationSuspended(hostsSuspended)
                     self.nativeVideoHost?.setPresentationSuspended(hostsSuspended)
                     let leavingUnloaded = self.appliedGlobalPresentation == .unloaded
                         && presentation != .unloaded
                     let resuming = presentation == .running && self.appliedGlobalPresentation != .running
                     self.wallpaperEnergy?.invalidate()
+                    // Nothing is rated while presentation is not running, so its ticks would only
+                    // wake an unattended Mac.
+                    self.wallpaperEnergy?.setParked(hostsSuspended)
                     self.telemetry?.invalidateFrames()
                     Task {
                         // Whether the bridge took it or not: it folds presentation
@@ -404,6 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                                 try await store.setPresentationUnloadedAsync(true)
                             }
                             self.appliedGlobalPresentation = presentation
+                            if presentation != .unloaded { self.spaceParking?.setUnloaded(false) }
                             if resuming {
                                 self.desktopWallpaperSync?.presentationResumed()
                                 self.windowAuditor?.presentationResumed()
@@ -420,10 +551,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                             // some unrelated UI change happens to apply one.
                             self.sceneMediaSink?.reconcile()
                             // Wallpapers presenting again is the moment an update alert held
-                            // back by sleep, a lock or an app rule may appear.
-                            self.retryHeldUpdatePrompt()
+                            // back by sleep, a lock or an app rule may appear, and sleep or a
+                            // lock is the moment an automatic update installs.
+                            self.updates.installIfUnattended()
                             completion(.success(()))
                         } catch {
+                            // An unload that did not happen frees nothing: the kept wallpapers
+                            // follow what was applied, not what was asked for.
+                            self.spaceParking?.setUnloaded(self.appliedGlobalPresentation == .unloaded)
                             AppLog.error("presentation suspend failed: \(error.localizedDescription)")
                             completion(.failure(error))
                         }
@@ -441,6 +576,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                             completion(.success(()))
                         } catch {
                             AppLog.error("audio suppress failed: \(error.localizedDescription)")
+                            completion(.failure(error))
+                        }
+                    }
+                },
+                applyAudioGain: { [weak self] gain, completion in
+                    guard let self, let store = self.store,
+                          !self.shutdownInProgress, !self.shutdownComplete else {
+                        completion(.failure(CancellationError()))
+                        return
+                    }
+                    // The snapshot this returns reaches the web pages and native video through
+                    // `onSnapshotApplied`, as a volume the user saves does.
+                    Task {
+                        do {
+                            try await store.setAudioGainAsync(gain)
+                            completion(.success(()))
+                        } catch {
+                            AppLog.error("audio gain failed: \(error.localizedDescription)")
                             completion(.failure(error))
                         }
                     }
@@ -494,7 +647,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                             // produces no snapshot of its own.
                             self.sceneMediaSink?.reconcile()
                             // Leaving a full-screen app shows the hidden display again.
-                            if !suspended { self.retryHeldUpdatePrompt() }
                             completion(.success(()))
                         } catch {
                             AppLog.error("""
@@ -510,16 +662,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             conditions.start()
             let power = PowerSourceMonitor()
             powerSourceMonitor = power
+            reportedPowerSource = power.source
             power.onChange = { [weak self] source in self?.powerSourceChanged(source) }
             power.start()
             policy.start()
-            desktopSpaces = .shared
-            desktopSpaces?.start()
             // After the Space monitor, whose topology the auditor reads to tell a
             // full-screen Space from a wallpaper window that is missing.
             let auditor = WallpaperWindowAuditor(
                 canExpectVisible: { [weak self] in self?.presentationPolicy?.globalPresentation == .running },
-                isDesktopSpace: { WallpaperWindowAuditor.spaceIsDesktop(displayID: $0, in: .shared) })
+                isDesktopSpace: { WallpaperWindowAuditor.spaceIsDesktop(displayID: $0, in: .shared) },
+                isConcealed: { [weak self] display in display.map { self?.spacePinning?.isConcealed($0) ?? false } ?? false },
+                isAwayFromCurrentDesktop: { [weak self] in self?.spacePinning?.isAwayFromCurrentDesktop($0) ?? false })
             windowAuditor = auditor
             auditor.start()
             let revalidator = SystemWakeRevalidator(
@@ -550,6 +703,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 if report.isWarning { AppLog.warn(report.message) } else { AppLog.info(report.message) }
                 self?.telemetry?.recordPressure(report)
             })
+            // The wallpapers kept paused for other desktops are let go while pressure lasts.
+            pressure.onPressureChanged = { [weak self] in self?.spaceParking?.setUnderPressure($0) }
             memoryPressureMonitor = pressure
             pressure.start()
             // A plug or unplug during sleep may never be reported. On wake the bridge reads
@@ -563,8 +718,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self.systemConditionMonitor?.refreshBattery()
             }
             powerSourceResampler?.start()
-            startPlaylistScheduler(store: store)
-            startAutomaticWallpapers(store: store)
+            let playlists = startPlaylistScheduler(store: store)
+            startAutomaticWallpapers(store: store, playlists: playlists, spaces: spaces, pressure: pressure)
             // The Shortcuts app lists these; commands wait for the handler set after bootstrap.
             AppAutomation.shared.wallpapers = {
                 store.librarySnapshot.wallpapers.filter(\.supported).map { (id: $0.id, title: $0.title) }
@@ -591,6 +746,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             Task { await WallpaperFocusFilter.refreshState() }
             startWallpaperEnergyRecorder(store: store)
             startTelemetry(store: store)
+            startActiveCount()
             do {
                 try lockScreen?.start()
                 if lockScreen?.isRequested != true { try startDesktopWallpaperSync() }
@@ -602,6 +758,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
         }
         bootstrapStore()
+    }
+
+    private func finishLaunching(launchEvent: NSAppleEventDescriptor?) {
         AppLog.info("startup: bootstrap dispatched")
         startDiagnosticsSessionIfRequested()
         finishedLaunching = true
@@ -610,12 +769,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         pendingOpenedFiles = []
         let opensPanel = ControlPanelLaunch.opensPanel(
             launchEvent: launchEvent,
-            welcomeSeen: ClientPreferences.defaults.bool(forKey: WebPanelController.welcomeSeenKey),
-            startupFailed: store == nil)
-        if !opensPanel { AppLog.info("startup: launched at login; control panel stays closed") }
+            welcomeSeen: PanelPreferences.welcomeSeen(),
+            startupFailed: store == nil,
+            environment: ProcessInfo.processInfo.environment)
+        if !opensPanel {
+            let reason = ControlPanelLaunch.isLoginItemLaunch(launchEvent)
+                ? "launched at login" : "\(ControlPanelLaunch.panelAtLaunchKey)=0"
+            AppLog.info("startup: \(reason); control panel stays closed")
+        }
         DispatchQueue.main.async { [weak self] in
             if opensPanel { self?.showControlPanel(selection: .wallpaper) }
-            self?.showWhatsNewAfterUpdate()
             if !opened.isEmpty { self?.importOpenedFiles(opened) }
         }
     }
@@ -656,29 +819,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Changes wallpapers on displays whose playlist rotates or follows the day. A switch goes
     /// through the display's command slot, like the panel's and the menu bar's, and picks its
     /// wallpaper when its turn comes.
-    private func startPlaylistScheduler(store: BridgeStore) {
+    private func startPlaylistScheduler(store: BridgeStore) -> PlaylistScheduler {
         let playlists = PlaylistStore.shared
         store.onWallpaperApplied = { [weak self] wallpaper, display in
             playlists.clearFailure(wallpaper, on: display)
             self?.schedulePosterRefresh()
         }
+        // Nil while wallpapers do not play on the display; otherwise whether it is paused only
+        // because it is out of sight (covered, behind a full-screen app, not the display in use).
+        let outOfSight: @MainActor (String) -> Bool? = { [weak self] display in
+            guard self?.automaticWallpapers?.scheduler.inFlight.contains(display) != true else { return nil }
+            return self?.ownSuspension(ofDisplay: display, store: store)
+        }
         let scheduler = PlaylistScheduler(
             store: playlists,
             collections: WallpaperCollectionStore.shared,
             displays: {
-                store.settingsSnapshot.displays.filter { $0.enabled && $0.mode == .standalone }.map(\.displayId)
+                store.settingsSnapshot.displays.filter(\.isIndependent).map(\.displayId)
             },
             library: { store.librarySnapshot.wallpapers.filter(\.supported).map(\.id) },
-            favorites: { Self.favoriteWallpaperIDs() },
+            favorites: { PanelPreferences.favorites() },
             current: { store.shownWallpaperID(on: $0) },
-            isRunning: { [weak self] display in
-                guard store.appSnapshot.playbackState == .playing,
-                    self?.automaticWallpapers?.scheduler.inFlight.contains(display) != true,
-                    let policy = self?.presentationPolicy, policy.globalPresentation == .running,
-                    let row = store.settingsSnapshot.displays.first(where: { $0.displayId == display }),
-                    let physicalID = ResolvedDisplayTitles.liveDisplayID(display, title: row.title)
-                else { return false }
-                return !policy.suspendedDisplayIDs.contains(physicalID)
+            isRunning: { outOfSight($0) == false },
+            isUnseen: { outOfSight($0) == true },
+            // Only a plain video has an end to wait for, and only the video host plays one.
+            watchClipEnd: { [weak self] display, wallpaper, ended in
+                guard let host = self?.nativeVideoHost,
+                      let row = store.settingsSnapshot.displays.first(where: { $0.displayId == display }),
+                      let physical = ResolvedDisplayTitles.liveDisplayID(display, title: row.title) else { return nil }
+                return host.watchClipEnd(displayID: physical, wallpaperID: wallpaper, ended: ended)
             },
             activate: { display, choose in
                 var applied: String?
@@ -699,24 +868,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         playlists.resumeHandler = { [weak scheduler] display in scheduler?.resume(display) }
         scheduler.start()
+        return scheduler
     }
 
-    private func startAutomaticWallpapers(store: BridgeStore) {
-        guard let playlistScheduler else { return }
+    /// Nil unless wallpapers play, presentation runs and the settings row `display` resolves to a
+    /// display id; otherwise whether that display alone is suspended (covered, behind a
+    /// full-screen app, not the display in use).
+    private func ownSuspension(ofDisplay display: String, store: BridgeStore) -> Bool? {
+        guard store.appSnapshot.playbackState == .playing,
+              let policy = presentationPolicy, policy.globalPresentation == .running,
+              let row = store.settingsSnapshot.displays.first(where: { $0.displayId == display }),
+              let physical = ResolvedDisplayTitles.liveDisplayID(display, title: row.title) else { return nil }
+        return policy.suspendedDisplayIDs.contains(physical)
+    }
+
+    /// Reconciles cached posters and window placement after automatic-selection inputs or results change.
+    private func updateAutomaticWallpaperContext() {
+        retainSpacePosters()
+        spacePinning?.update()
+        spaceParking?.update()
+    }
+
+    /// Needs the playlist scheduler, the Space monitor and the memory-pressure monitor, all
+    /// started before it.
+    private func startAutomaticWallpapers(
+        store: BridgeStore, playlists playlistScheduler: PlaylistScheduler,
+        spaces: WallpaperSpaceMonitor, pressure: MemoryPressureMonitor
+    ) {
         let controller = WallpaperAutomationController(bridge: store, rules: .shared, playlists: .shared, collections: .shared,
             focus: .shared, displays: { Self.availableAutomationDisplays(store: store).map(\.displayId) },
             targetDisplay: { [weak self] in self?.controlPanelNavigation.targetDisplayID ?? "primary" },
-            canRun: { [weak self] display in
-                guard store.appSnapshot.playbackState == .playing,
-                      let policy = self?.presentationPolicy, policy.globalPresentation == .running,
-                      let row = store.settingsSnapshot.displays.first(where: { $0.displayId == display }),
-                      let physical = ResolvedDisplayTitles.liveDisplayID(display, title: row.title) else { return false }
-                return !policy.suspendedDisplayIDs.contains(physical)
-            }, playlistScheduler: playlistScheduler, spaceMonitor: desktopSpaces,
-            onSettled: { [weak self] in self?.schedulePosterRefresh() })
+            canRun: { [weak self] display in self?.ownSuspension(ofDisplay: display, store: store) == false },
+            playlistScheduler: playlistScheduler, spaceMonitor: spaces,
+            onInputsChanged: { [weak self] notification in
+                self?.updateAutomaticWallpaperContext()
+                self?.schedulePosterRefresh(after: notification)
+            },
+            onSettled: { [weak self] in
+                self?.updateAutomaticWallpaperContext()
+                self?.schedulePosterRefresh()
+            })
         automaticWallpapers = controller
-        store.onUserWallpaperChoice = { [weak self, weak controller] _, display in
-            controller?.scheduler.noteManualChoice(display)
+        store.onUserWallpaperChoice = { [weak self, weak controller] wallpaper, display in
+            controller?.scheduler.noteManualChoice(display, wallpaperID: wallpaper)
             self?.playlistScheduler?.noteManualChoice(display)
             self?.schedulePosterRefresh()
         }
@@ -731,13 +925,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             controller?.scheduler.noteManualChoice(display)
         }
         controller.scheduler.start()
+        let mover = SystemSpaceWindowMover()
+        let replicas = WallpaperSpaceReplicas(
+            plan: { [weak self] in self?.spaceReplicaPlan(keeping: self?.spaceParking?.current ?? [:]) ?? [:] },
+            sources: { [weak self] in self?.spaceReplicaSources() ?? [] }, mover: mover)
+        spaceReplicas = replicas
+        let pinning = WallpaperSpacePinning(
+            windows: { [weak self] in
+                SystemPinnableWindow.all(wallpaperIDs: self?.wallpaperIDsByWindow() ?? [:]) { number, display, wallpaper in
+                    self?.wallpaperWindowIsReady(number: number, display: display, wallpaper: wallpaper) ?? false
+                }
+            },
+            pins: { [weak self] in self?.spacePins() ?? [:] },
+            holding: { [weak self] display in self?.switchHold?.isHolding(display) ?? false },
+            mover: mover)
+        pinning.onUpdated = { [weak replicas] in replicas?.update() }
+        spacePinning = pinning
+        pinning.start()
+        let parking = WallpaperSpaceParking(
+            plan: { [weak self] in self?.spaceParkingPlan() ?? [:] },
+            send: { [weak store] display, wallpapers in
+                try await store?.setDisplayParkedWallpapersAsync(displayID: display, wallpaperIDs: wallpapers)
+            },
+            hosts: { [weak self] plan in
+                self?.webWallpaperHost?.setKeptWallpapers(plan)
+                self?.nativeVideoHost?.setKeptWallpapers(plan)
+                self?.spaceReplicas?.update()
+            },
+            prepared: { [weak self] display, wallpaper in
+                self?.desktopWallpaperIsLoaded(display: display, wallpaper: wallpaper) ?? true
+            },
+            preload: { [weak self] display, wallpaper in
+                try await self?.preloadDesktopWallpaper(display: display, wallpaper: wallpaper)
+            })
+        spaceParking = parking
+        parking.setUnderPressure(pressure.underPressure)
+        parking.setUnloaded(appliedGlobalPresentation == .unloaded)
+        parking.start()
     }
 
-    /// The panel's favorites, which a playlist can rotate through.
-    private static func favoriteWallpaperIDs() -> Set<String> {
-        guard let data = ClientPreferences.defaults.data(forKey: WebPanelController.favoriteKey),
-              let ids = try? JSONDecoder().decode([String].self, from: data) else { return [] }
-        return Set(ids)
+    /// Keeps what the running scenes say about being drawn, so the Compatibility card can tell it
+    /// later without running them. Only a changed set of reports is handed over.
+    private func recordSceneDrawVerdicts(_ store: BridgeStore) {
+        let reports = store.settingsSnapshot.sceneRenderers
+        guard reports != recordedSceneReports, let verdicts = store.sceneDrawVerdicts else { return }
+        recordedSceneReports = reports
+        let revision = store.snapshotRevision
+        Task { await verdicts.record(reports: reports, revision: revision) }
     }
 
     /// Rates each wallpaper's energy use from background samples while it plays alone.
@@ -745,13 +979,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// can be credited.
     private func startWallpaperEnergyRecorder(store: BridgeStore) {
         let ratings = WallpaperEnergyRatings(
-            file: ClientPaths.supportURL.appendingPathComponent("EnergyRatings.json"),
+            file: ClientPaths.energyRatingsURL,
             batteryWattHours: { BatteryCapacity.fullChargeWattHours() })
         store.wallpaperEnergyRatings = ratings
         let recorder = WallpaperEnergyRecorder(
             source: CoalitionEnergySource(), ratings: ratings
         ) { [weak self] in self?.wallpaperEnergyContext() }
         wallpaperEnergy = recorder
+        // The policy started first and may already have suspended presentation.
+        recorder.setParked(presentationPolicy.map { $0.globalPresentation != .running } ?? false)
         recorder.start()
     }
 
@@ -774,6 +1010,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         service.start()
     }
 
+    /// See `TelemetryActiveCount`: once a day, for everyone, with no install id. A run with
+    /// its own app-support folder or preferences sends nothing.
+    private func startActiveCount() {
+        guard TelemetryActiveCount.countsRun(environment: ProcessInfo.processInfo.environment) else { return }
+        let count = TelemetryActiveCount(sender: TelemetryClient())
+        activeCount = count
+        count.start()
+    }
+
     /// The scenes a frame window credits, by display. Nil while nothing plays; a display
     /// suspended on its own is left out, so its paused surface is not counted.
     private func telemetryFrameContext() -> TelemetryFrameContext? {
@@ -790,7 +1035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         for scene in settings.sceneRenderers where !policy.suspendedDisplayIDs.contains(scene.displayId) {
             scenes[scene.displayId] = TelemetryFrameContext.Scene(
                 wallpaperID: scene.wallpaperId, kind: TelemetryReport.Kind(kinds[scene.wallpaperId]),
-                backend: scene.backend, fallback: scene.fallbackReason != nil, mode: modes[scene.displayId])
+                backend: scene.backend, mode: modes[scene.displayId])
         }
         let process = ProcessInfo.processInfo
         return TelemetryFrameContext(
@@ -818,11 +1063,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return nil
         }
         let settings = store.settingsSnapshot
-        let connected = Set(WebWallpaperHost.systemScreens().map(\.id))
+        let connected = Set(SystemDisplays.screens().map(\.id))
         let liveDisplays = Dictionary(store.monitorInformationSnapshot.rows.compactMap { row in
             ResolvedDisplayTitles.liveDisplayID(row.displayId, title: row.title)
                 .flatMap { connected.contains($0) ? (row.displayId, $0) : nil }
         }, uniquingKeysWith: { first, _ in first })
+        let library = store.librarySnapshot.wallpapers
         return WallpaperEnergyContext.resolve(
             assignments: store.monitorInformationSnapshot.rows.map {
                 (display: $0.displayId, wallpaper: $0.wallpaperId)
@@ -830,6 +1076,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             suspendedDisplays: policy.suspendedDisplayIDs,
             nativeVideoDisplays: nativeVideoHost?.activeDisplayIDs ?? [],
             frameRateCap: settings.effectiveFrameRateCap, renderScale: settings.renderScale,
+            scene: WallpaperEnergySceneSettings(
+                resolution: settings.sceneResolution, quality: settings.sceneQuality,
+                metalFXUpscaling: settings.metalfxUpscalingEnabled),
+            // A wallpaper of unknown kind keeps the scene settings: rating it apart costs a
+            // new measurement, rating it together could mix two costs.
+            isScene: { id in
+                let kind = library.first { $0.id == id }?.kind
+                return kind != .video && kind != .webpage
+            },
             resolveDisplay: { liveDisplays[$0] })
     }
 
@@ -885,37 +1140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        globalHotKeys?.stop()
-        AppAutomation.shared.handler = nil
-        AppAutomation.shared.displays = nil
-        AppAutomation.shared.playlistPlans = nil
-        AppAutomation.shared.displayLayouts = nil
-        AppAutomation.shared.propertyPresets = nil
-        automaticWallpapers?.scheduler.stop()
-        desktopSpaces?.stop()
-        playlistScheduler?.stop()
-        stopPlaybackMonitoring()
-        wallpaperEnergy?.stop()
-        wallpaperEnergy = nil
-        telemetry?.stop()
-        telemetry = nil
-        presentationPolicy?.stop()
-        presentationPolicy = nil
-        windowAuditor?.stop()
-        windowAuditor = nil
-        wakeRevalidator?.stop()
-        wakeRevalidator = nil
-        memoryPressureMonitor?.stop()
-        memoryPressureMonitor = nil
-        switchHold?.stop()
-        switchHold = nil
-        desktopWallpaperSync?.stop()
-        previewWindow?.session.close()
-        previewWindow?.close()
-        previewWindow = nil
-        sceneMediaSink?.shutdown()
-        webWallpaperHost?.shutdown()
-        nativeVideoHost?.shutdown()
+        // A quit that ran its stages restored the desktop and let the sync go; any other puts
+        // the desktop back here.
+        tearDownServices(restoringDesktop: true)
         if let displayChangeObserver {
             NotificationCenter.default.removeObserver(displayChangeObserver)
             self.displayChangeObserver = nil
@@ -979,7 +1206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // A copy opened while this one quits waits for the library instead of handing over to it.
         InstanceLock.current?.setPhase(.quitting)
         let panelWasVisible = controlPanelWindow?.isVisible == true
-        let whatsNewWasVisible = whatsNewWindow?.isVisible == true
+        let updateWindowWasVisible = updates.window?.isVisible == true
         previewWindow?.session.close()
         previewWindow?.close()
         previewWindow = nil
@@ -989,8 +1216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Keep this restorer through native-provider callbacks and reloads.
         let wallpaperRestorer = desktopWallpaperSync
         controlPanelWindow?.orderOut(nil)
-        whatsNewWindow?.orderOut(nil)
-        NSApp.setActivationPolicy(.accessory)
+        updates.window?.orderOut(nil)
+        leaveDockUnlessAWindowIsOpen()
 
         Task {
             var supervisor = QuitSupervisor(mode: mode)
@@ -1010,12 +1237,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // the reply is out, by a new one. The reply never lands on a quit that has begun.
                 cancelQuit(
                     cancellation, restorationBudget: supervisor.budgets.restoration,
-                    restoringPanel: panelWasVisible, whatsNew: whatsNewWasVisible)
+                    restoringPanel: panelWasVisible, updateWindow: updateWindowWasVisible)
                 sender.reply(toApplicationShouldTerminate: false)
-                presentQuitFailure(cancellation)
+                if !updates.updater.isAutomaticInstallation { presentQuitFailure(cancellation) }
                 // An installer waiting for this app to quit would replace it whenever it did. The
                 // helper takes up to two seconds to answer, which is why this comes last.
-                await appUpdater.cancelPendingInstall()
+                await updates.updater.cancelPendingInstall()
+                await updates.resumeAfterCancelledQuit()
                 rebuildMenu()
             case .proceed(let stalled):
                 completeQuit(sender, reason: reason, signal: signal, desktopUnrestored: false, stalled: stalled)
@@ -1067,39 +1295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// minimum of time).
     private func servicesToTearDownForQuit() -> [QuitSupervisor.Stage] {
         [
-            .init(name: "services") { [self] in
-                globalHotKeys?.stop()
-                AppAutomation.shared.handler = nil
-                AppAutomation.shared.displays = nil
-                AppAutomation.shared.playlistPlans = nil
-                AppAutomation.shared.displayLayouts = nil
-                AppAutomation.shared.propertyPresets = nil
-                automaticWallpapers?.scheduler.stop()
-                desktopSpaces?.stop()
-                playlistScheduler?.stop()
-                stopPlaybackMonitoring()
-                wallpaperEnergy?.stop()
-                wallpaperEnergy = nil
-                telemetry?.stop()
-                telemetry = nil
-                presentationPolicy?.stop()
-                presentationPolicy = nil
-                windowAuditor?.stop()
-                windowAuditor = nil
-                wakeRevalidator?.stop()
-                wakeRevalidator = nil
-                memoryPressureMonitor?.stop()
-                memoryPressureMonitor = nil
-                switchHold?.stop()
-                switchHold = nil
-                desktopWallpaperSync = nil
-                sceneMediaSink?.shutdown()
-                sceneMediaSink = nil
-                webWallpaperHost?.shutdown()
-                webWallpaperHost = nil
-                automaticUpdates?.cancel()
-                appUpdater.cancel()
-            },
+            .init(name: "services") { [self] in tearDownServices(restoringDesktop: false) },
             .init(name: "imports") { [self] in await libraryImports.shutdown() },
             .init(name: "steamcmd") { [self] in await workshopStore.steamCMDSetup.shutdown() },
             .init(name: "workshop") { [self] in await workshopStore.downloader.shutdown() },
@@ -1116,6 +1312,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         ]
     }
 
+    /// Stops the timers, monitors and hosts the app runs: the quit's `services` stage, and again
+    /// in `applicationWillTerminate` for a quit that did not run its stages. Safe to run twice.
+    /// The quit's `restore` stage already put the desktop back, so its `services` stage only lets
+    /// the sync go; `applicationWillTerminate` restores it in the place it always has.
+    private func tearDownServices(restoringDesktop: Bool) {
+        libraryDrive?.stop()
+        globalHotKeys?.stop()
+        AppAutomation.shared.handler = nil
+        AppAutomation.shared.displays = nil
+        AppAutomation.shared.playlistPlans = nil
+        AppAutomation.shared.displayLayouts = nil
+        AppAutomation.shared.propertyPresets = nil
+        automaticWallpapers?.scheduler.stop()
+        desktopSpaces?.stop()
+        playlistScheduler?.stop()
+        stopPlaybackMonitoring()
+        wallpaperEnergy?.stop()
+        wallpaperEnergy = nil
+        telemetry?.stop()
+        telemetry = nil
+        activeCount?.stop()
+        activeCount = nil
+        presentationPolicy?.stop()
+        presentationPolicy = nil
+        windowAuditor?.stop()
+        windowAuditor = nil
+        notchMask?.stop()
+        notchMask = nil
+        wakeRevalidator?.stop()
+        wakeRevalidator = nil
+        memoryPressureMonitor?.stop()
+        memoryPressureMonitor = nil
+        spaceReplicas?.stop()
+        spaceReplicas = nil
+        spacePinning?.stop()
+        spacePinning = nil
+        spaceParking?.stop()
+        spaceParking = nil
+        switchHold?.stop()
+        switchHold = nil
+        if restoringDesktop { desktopWallpaperSync?.stop() }
+        desktopWallpaperSync = nil
+        previewWindow?.session.close()
+        previewWindow?.close()
+        previewWindow = nil
+        sceneMediaSink?.shutdown()
+        sceneMediaSink = nil
+        webWallpaperHost?.shutdown()
+        webWallpaperHost = nil
+        nativeVideoHost?.shutdown()
+        nativeVideoHost = nil
+        updates.cancel()
+    }
+
     /// The desktop could not be restored in time or at all, so the app keeps running:
     /// everything the quit stopped starts again and the panel comes back. Synchronous on
     /// purpose: the caller replies to the system right after it, and the app must not count
@@ -1123,7 +1373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// A pending update install is called off by the caller afterwards.
     private func cancelQuit(
         _ cancellation: QuitSupervisor.Cancellation, restorationBudget: Duration,
-        restoringPanel: Bool, whatsNew: Bool
+        restoringPanel: Bool, updateWindow restoringUpdateWindow: Bool
     ) {
         let failure = QuitFailure(cancellation)
         switch cancellation {
@@ -1153,9 +1403,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if restoringPanel {
             showControlPanel(selection: controlPanelNavigation.selection ?? .wallpaper)
         }
-        if whatsNew, let whatsNewWindow {
+        if restoringUpdateWindow, let updateWindow = updates.window {
             NSApp.setActivationPolicy(.regular)
-            whatsNewWindow.makeKeyAndOrderFront(nil)
+            ControlPanelWindow.bringForward(updateWindow)
         }
         rebuildMenu()
     }
@@ -1170,11 +1420,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// request that arrives while a quit is already running. The Apple event is only
     /// readable here, while it is being handled.
     private func logQuitRequest() -> (reason: QuitReason, mode: QuitMode, signal: Int32?) {
-        let appleEventReason = QuitReason.appleEventReason(from: NSAppleEventManager.shared().currentAppleEvent)
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let appleEventReason = QuitReason.appleEventReason(from: event)
+        let requester = QuitRequester.resolve(
+            menuChosen: quitChosenFromMenu, senderPID: QuitRequester.senderPID(of: event))
+        quitChosenFromMenu = false
         let signal = terminationSignal
         terminationSignal = nil
         let powerOffNotified = powerOffNotice.isCurrent()
-        let updateInstallPending = appUpdater.isInstallPending
+        let updateInstallPending = updates.updater.isInstallPending
         let reason = QuitReason.classify(
             appleEventReason: appleEventReason,
             powerOffNotified: powerOffNotified,
@@ -1184,6 +1438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
         AppLog.info(
             "quit: reason=\(reason.rawValue) mode=\(mode.rawValue) "
+                + "from=\(requester.logText()) "
                 + "frontmost=\(frontmost) "
                 + "panelVisible=\(controlPanelWindow?.isVisible ?? false) "
                 + "updateInstallPending=\(updateInstallPending) "
@@ -1239,7 +1494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func syncPlaybackMonitors() {
         let preferences = PlaybackPreferences.shared
-        if preferences.appRules.isEmpty {
+        if !AppRuleMonitor.isNeeded(for: preferences) {
             appRuleMonitor?.stop()
         } else {
             appRuleMonitor?.start()
@@ -1270,9 +1525,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// The renderer applies its power policy (battery Pause, Reduced quality) when
     /// the source changes and reports nothing back. Reading the snapshot again is
     /// what makes the hosts here (web pages, native video) take in the pause, frame
-    /// rate and render scale that came with it.
+    /// rate and render scale that came with it. The app's own battery-scoped rule
+    /// ("When another app is in front" set to Pause on battery) is worked out again
+    /// at once, and so are the post-wake reads, which arrive here when they find a
+    /// different source.
     private func powerSourceChanged(_ source: PowerSourceMonitor.Source) {
+        let previous = reportedPowerSource
+        reportedPowerSource = source
         guard let store, !shutdownInProgress, !shutdownComplete else { return }
+        // A wallpaper presenting across a change to or from battery played on battery, which
+        // is what the one-time battery question waits for (a panel opened on battery sees it
+        // for itself).
+        if source == .battery || previous == .battery, wallpaperIsPresenting(store) {
+            store.supportPrompt?.recordBatteryUse()
+        }
+        appRuleMonitor?.refresh()
         powerSourceRefresh?.cancel()
         powerSourceRefresh = Task { [weak self] in
             await PowerSourceRefresh.run(
@@ -1293,19 +1560,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    /// A wallpaper is on a display and drawing: not paused by the user or by the presentation
+    /// policy for every display, and its display is not suspended on its own (covered, behind a
+    /// full-screen app, not the display in use).
+    private func wallpaperIsPresenting(_ store: BridgeStore) -> Bool {
+        store.settingsSnapshot.displays.contains { row in
+            store.shownWallpaperID(on: row.displayId) != nil
+                && ownSuspension(ofDisplay: row.displayId, store: store) == false
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 
+    /// A click on the Dock icon returns to the section the panel last showed. The delegate has
+    /// handled the reopen itself, so it answers false and AppKit adds nothing of its own.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // A Dock click returns to the last native section, even after releasing the page.
         showControlPanel(selection: controlPanelNavigation.selection ?? .wallpaper)
         return false
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        refreshStoreSnapshot()
-        rebuildMenu(menu)
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
@@ -1313,209 +1586,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return ControlPanelWindow.clampedFrameSize(frameSize, for: sender)
     }
 
-    func windowDidEnterFullScreen(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === controlPanelWindow else { return }
-        ControlPanelWindow.setFullScreenLayout(true, for: window)
-    }
-
-    func windowDidExitFullScreen(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === controlPanelWindow else { return }
-        ControlPanelWindow.setFullScreenLayout(false, for: window)
-    }
-
-    func windowDidBecomeKey(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === controlPanelWindow else { return }
-        retryHeldUpdatePrompt()
-    }
-
+    /// Closing the panel releases its controller; the stores and the navigation object outlive it,
+    /// so opening it again builds a fresh view around them and resumes where it was.
     func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else { return }
-        if window === whatsNewWindow {
-            whatsNewWindow = nil
-            window.contentViewController = nil
-            if controlPanelWindow?.isVisible != true, previewWindow == nil { NSApp.setActivationPolicy(.accessory) }
-            retryHeldUpdatePrompt()
-            return
-        }
-        guard window === controlPanelWindow else { return }
+        guard let window = notification.object as? NSWindow, window === controlPanelWindow else { return }
 
         controlPanelWindow = nil
-        // Closing releases the page and its WebKit processes; reopening builds a
-        // fresh view around the existing stores and navigation.
         window.contentViewController = nil
-        if whatsNewWindow == nil, previewWindow == nil { NSApp.setActivationPolicy(.accessory) }
+        leaveDockUnlessAWindowIsOpen()
         rebuildMenu()
     }
 
-    private func startDesktopWallpaperSync() throws {
-        guard !shutdownInProgress else { return }
-        // Every start comes through here, so with the switch off no poster can be written.
-        guard PlaybackPreferences.shared.writesDesktopPicture else { return }
-        // A restore the switch started still owns the journal and the posters folder, and its
-        // sync is suspended: a second sync would write posters the restore then overwrites.
-        // The restore re-runs this through `applyDesktopPicturePreference` when it ends.
-        guard restoringDesktopPicture == nil else { return }
-        if let sync = desktopWallpaperSync, !sync.isSuspended {
-            sync.refresh()
-            return
+    /// Drops to `.accessory` once none of the app's ordinary windows is open
+    /// (`ActivationPolicyRule`). A window that is closing still reports itself visible, so
+    /// callers forget it first; whatever opens a window raises the policy itself.
+    func leaveDockUnlessAWindowIsOpen() {
+        let windows = NSApp.windows.map { window in
+            ActivationPolicyRule.Window(
+                role: activationPolicyRole(of: window),
+                isVisible: window.isVisible, isMiniaturized: window.isMiniaturized)
         }
-        let sync = try DesktopWallpaperSync(folder: ClientPaths.supportURL.appendingPathComponent("DesktopPosters"),
-            scope: { [weak self] display in self?.desktopPosterScope(display) ?? .all },
-            retainedDisplays: { [weak self] in self?.retainedSpacePosterDisplays() ?? [] },
-            beforeDesktopChange: { [weak self] in self?.desktopSpaces?.refresh() })
-        desktopWallpaperSync = sync
-        sync.canCapture = { [weak self] surface in
-            guard let policy = self?.presentationPolicy else { return true }
-            return !policy.isSuspended
-                && !(UInt32(surface.display).map(policy.suspendedDisplayIDs.contains) ?? false)
-        }
-        // Property edits shown on a display before Apply changes stay out of the picture macOS shows.
-        sync.showsUnsavedLook = { [weak self] surface in
-            self?.store?.isShowingPropertyEdits(onDisplay: surface.display) ?? false
-        }
-        sync.refreshesPeriodically = PlaybackPreferences.shared.refreshesDesktopPicturePeriodically
-        sync.start()
-        sync.refresh()
+        guard !ActivationPolicyRule.keepsRegular(windows, quitting: shutdownInProgress) else { return }
+        NSApp.setActivationPolicy(.accessory)
     }
 
-    /// Makes the desktop picture follow Settings › General › Use the wallpaper as the macOS desktop
-    /// picture. On, posters start if they are not running. Off, the user's own picture is put
-    /// back with the same verified restore a quit uses, and the poster sync is dropped; a poster
-    /// that a crash or an earlier run left behind is found in the journal and put back too.
-    /// Idle while the animated lock screen has the desktop: the switch is locked then, and the
-    /// native provider journals the poster as its own original.
-    private func applyDesktopPicturePreference() {
-        guard store != nil, !shutdownInProgress, !shutdownComplete, restoringDesktopPicture == nil,
-              store?.lockScreenWallpaper?.claimsDesktopPicture != true else { return }
-        if PlaybackPreferences.shared.writesDesktopPicture {
-            desktopPictureRestoreSettled = false
-            // Another preference changing must not take every poster again.
-            if desktopWallpaperSync?.isSuspended == false { return }
-            do { try startDesktopWallpaperSync() } catch {
-                lastError = error
-                AppLog.error("Desktop poster sync could not be started: \(error.localizedDescription)")
-            }
-            return
-        }
-        guard !desktopPictureRestoreSettled else { return }
-        let folder = ClientPaths.supportURL.appendingPathComponent("DesktopPosters")
-        let sync: DesktopWallpaperSync
-        if let running = desktopWallpaperSync {
-            sync = running
-        } else if DesktopWallpaperLedger.hasRecordedOriginals(in: folder) {
-            do { sync = try DesktopWallpaperSync(folder: folder) } catch {
-                lastError = error
-                AppLog.error("Desktop picture could not be restored: \(error.localizedDescription)")
-                return
-            }
-        } else {
-            return
-        }
-        AppLog.info("Desktop picture: writing is off; putting the macOS wallpaper back")
-        // At once, not when the task starts: no frame may be written in between.
-        sync.suspendForNativeProvider()
-        restoringDesktopPicture = Task { @MainActor [weak self] in
-            do {
-                try await sync.restoreForTermination()
-                guard let self else { return }
-                self.desktopPictureRestoreSettled = true
-                if self.desktopWallpaperSync === sync { self.desktopWallpaperSync = nil }
-                AppLog.info("Desktop picture: the macOS wallpaper is back")
-            } catch is CancellationError {
-                // A quit began and restores the desktop itself.
-            } catch {
-                guard let self else { return }
-                // Kept suspended, so quitting retries the restore.
-                if self.desktopWallpaperSync == nil { self.desktopWallpaperSync = sync }
-                self.desktopPictureRestoreSettled = true
-                self.lastError = error
-                AppLog.error("Desktop picture could not be put back: \(error.localizedDescription)")
-                self.rebuildMenu()
-            }
-            // The switch may have been turned on again meanwhile; a restore that ran is not repeated here.
-            self?.restoringDesktopPicture = nil
-            self?.applyDesktopPicturePreference()
-        }
-    }
-
-    private func desktopPosterScope(_ physicalDisplay: String) -> DesktopPosterScope {
-        guard let store else { return .hold }
-        guard let row = store.settingsSnapshot.displays.first(where: {
-            ResolvedDisplayTitles.liveDisplayID($0.displayId, title: $0.title).map(String.init) == physicalDisplay
-        }) else { return WallpaperAutomationStore.shared.configurations.values.contains { $0.mode == .spaces } ? .hold : .all }
-        guard row.enabled, row.mode == .standalone,
-              WallpaperAutomationStore.shared.configuration(for: row.displayId).mode == .spaces else { return .all }
-        guard store.lockScreenWallpaper?.isRequested != true, store.lockScreenWallpaper?.ownsDesktopProvider != true,
-              store.activatingWallpaperID == nil, store.applyingWallpaperID == nil,
-              automaticWallpapers?.scheduler.selectionIsSettled(on: row.displayId) == true,
-              let visit = desktopSpaces?.visit(for: physicalDisplay) else { return .hold }
-        let wallpaper = store.monitorInformationSnapshot.rows.first(where: { $0.displayId == row.displayId })?.wallpaperId ?? ""
-        return .desktop(id: visit.spaceID, context: "\(visit.token):\(wallpaper):\(store.wallpaperContentRevision)")
-    }
-
-    private func retainedSpacePosterDisplays() -> Set<String> {
-        guard let store else { return [] }
-        return Set(store.settingsSnapshot.displays.compactMap { row in
-            guard row.enabled, row.mode == .standalone,
-                  WallpaperAutomationStore.shared.configuration(for: row.displayId).mode == .spaces,
-                  let physical = ResolvedDisplayTitles.liveDisplayID(row.displayId, title: row.title),
-                  automaticWallpapers?.scheduler.inFlight.contains(row.displayId) == true
-                    || store.monitorInformationSnapshot.rows.contains(where: { $0.displayId == row.displayId && !$0.wallpaperId.isEmpty }) else { return nil }
-            return String(physical)
-        })
-    }
-
-    /// Apply callbacks run before BridgeStore releases its activation flag. Request scoped
-    /// pixels on the next actor turn, after that flag and manual-choice bookkeeping settle.
-    private func schedulePosterRefresh() {
-        guard posterRefreshTask == nil, !shutdownInProgress, !shutdownComplete else { return }
-        posterRefreshTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer { posterRefreshTask = nil }
-            guard !Task.isCancelled, !shutdownInProgress, !shutdownComplete else { return }
-            desktopWallpaperSync?.refresh()
-        }
-    }
-
-    private func installStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem = item
-
-        let button = item.button
-        let trayIcon = NSImage(named: "TrayIcon")
-        if let button {
-            button.image = trayIcon
-                ?? NSImage(systemSymbolName: "play.rectangle", accessibilityDescription: "WallpaperMachine")
-            button.image?.isTemplate = true
-        }
-
-        AppLog.info("startup: statusItem installed: button=\(button != nil) trayIconAssetResolved=\(trayIcon != nil)")
-
-        let menu = NSMenu()
-        menu.delegate = self
-        item.menu = menu
-        rebuildMenu(menu)
-    }
-
-    /// Work around an AppKit/SwiftUI timing issue: when launched via
-    /// LaunchServices (Finder double-click) in `.accessory` activation
-    /// policy, a status item created in `applicationDidFinishLaunching`
-    /// may be created correctly but never rendered because the SwiftUI
-    /// Scene phase hasn't stabilized yet. Deferring by one runloop turn
-    /// gives the Scene phase time to settle. Re-asserting the activation
-    /// policy afterwards forces AppKit to re-register accessory-mode
-    /// status items with the Window Server; rebuilding the menu alone
-    /// only mutates `NSMenu` items and does not touch the status item's
-    /// backing window, so it is insufficient by itself.
-    private func synchronizeStatusItem() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.statusItem != nil else { return }
-            // Re-assert the activation policy to force AppKit to
-            // re-register the accessory-mode status item with the
-            // Window Server after the SwiftUI Scene phase has settled.
-            if self.controlPanelWindow == nil, self.whatsNewWindow == nil, self.previewWindow == nil { NSApp.setActivationPolicy(.accessory) }
-            self.rebuildMenu()
-        }
+    private func activationPolicyRole(of window: NSWindow) -> ActivationPolicyRule.Window.Role? {
+        if window === controlPanelWindow { return .controlPanel }
+        if window === updates.window { return .update }
+        if window === previewWindow?.window { return .preview }
+        if WebSignInWindowController.isOpen(window) { return .signIn }
+        return nil
     }
 
     private func installDisplayChangeObserver() {
@@ -1543,235 +1643,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    private func installApplicationMenu() {
-        let menu = NSMenu()
-        let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu(title: "WallpaperMachine")
-        let settings = menuItem("Settings…", action: #selector(openSettings))
-        settings.keyEquivalent = ","
-        applicationMenu.addItem(settings)
-        applicationMenu.addItem(menuItem("Check for Updates…", action: #selector(checkForUpdates)))
-        applicationMenu.addItem(.separator())
-        let quit = menuItem("Quit WallpaperMachine", action: #selector(exitApplication))
-        quit.keyEquivalent = "q"
-        applicationMenu.addItem(quit)
-        applicationItem.submenu = applicationMenu
-        menu.addItem(applicationItem)
-
-        // Command-W reaches the key window, so the panel hides exactly as its close button does.
-        let fileItem = NSMenuItem()
-        let fileMenu = NSMenu(title: String(localized: "File"))
-        fileMenu.addItem(
-            withTitle: String(localized: "Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        fileItem.submenu = fileMenu
-        menu.addItem(fileItem)
-
-        // Keep standard text editing shortcuts in search and setup fields.
-        let editItem = NSMenuItem()
-        let editMenu = NSMenu(title: String(localized: "Edit"))
-        let editCommands: [(String.LocalizationValue, Selector, String)] = [
-            ("Undo", Selector(("undo:")), "z"),
-            ("Redo", Selector(("redo:")), "Z"),
-            ("Cut", #selector(NSText.cut(_:)), "x"),
-            ("Copy", #selector(NSText.copy(_:)), "c"),
-            ("Paste", #selector(NSText.paste(_:)), "v"),
-            ("Select All", #selector(NSText.selectAll(_:)), "a")
-        ]
-        for (title, action, key) in editCommands {
-            editMenu.addItem(withTitle: String(localized: title), action: action, keyEquivalent: key)
-        }
-        editItem.submenu = editMenu
-        menu.addItem(editItem)
-        NSApp.mainMenu = menu
-    }
-
-    private func rebuildMenu(_ menu: NSMenu? = nil) {
-        guard let menu = menu ?? statusItem?.menu else {
-            return
-        }
-
-        menu.removeAllItems()
-        statusMenuItems(for: StatusMenuModel.entries(for: statusMenuInput())).forEach(menu.addItem)
-
-        if let item = updateMenuItem() {
-            menu.addItem(.separator())
-            menu.addItem(item)
-        }
-
-        // A login launch leaves the panel closed, so the menu is where a held wallpaper shows.
-        if let store, !store.heldWallpaperIDs.isEmpty {
-            menu.addItem(.separator())
-            menu.addItem(disabledMenuItem(String(localized: "A wallpaper was held back after a crash")))
-        }
-
-        if let error = startupError ?? lastError {
-            menu.addItem(.separator())
-            menu.addItem(disabledMenuItem(error.localizedDescription))
-        }
-
-        menu.addItem(.separator())
-        // A second Exit is refused while a quit runs, so say that it is running.
-        if shutdownInProgress {
-            menu.addItem(disabledMenuItem(String(localized: "Quitting…")))
-        } else {
-            menu.addItem(menuItem("Exit", action: #selector(exitApplication)))
-        }
-    }
-
-    private func menuItem(_ title: String.LocalizationValue, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(
-            title: String(localized: title),
-            action: action,
-            keyEquivalent: ""
-        )
-        item.target = self
-        return item
-    }
-
-    private func disabledMenuItem(_ title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
-    }
-
-    /// What the status menu's layout depends on. While the app starts or quits no display is
-    /// offered, since a command on one could not run.
-    private func statusMenuInput() -> StatusMenuModel.Input {
-        var displays: [StatusMenuModel.Display] = []
-        if let store, !shutdownInProgress, !shutdownComplete {
-            let screens = WebWallpaperHost.systemScreens()
-            let rows = StatusMenuModel.eligibleDisplays(store.settingsSnapshot.displays, connected: Set(screens.map(\.id)))
-            let titles = DisplayTitleResolver.system.resolved()
-            let candidates = rows.map { row -> StatusMenuModel.Candidate in
-                let physicalID = ResolvedDisplayTitles.liveDisplayID(row.displayId, title: row.title)
-                let frame = screens.first { $0.id == physicalID }?.frame
-                return StatusMenuModel.Candidate(
-                    id: row.displayId, title: titles.title(row.title, displayId: row.displayId),
-                    physicalID: physicalID, minX: Double(frame?.minX ?? 0))
-            }
-            let wallpapers = Dictionary(store.librarySnapshot.wallpapers.filter(\.supported).map { ($0.id, $0.title) },
-                                        uniquingKeysWith: { first, _ in first })
-            let available = Set(wallpapers.keys)
-            // The menu's Random Wallpaper draws from every wallpaper that can play and is not held
-            // back, so it acts on a display when something other than what it shows is among them.
-            let randomPool = AutomationCommand.RandomPool.all.candidates(
-                library: Array(available), favorites: [], held: Set(store.heldWallpaperIDs))
-            displays = StatusMenuModel.orderedDisplays(candidates, mainDisplay: screens.first?.id).map { candidate in
-                let shown = store.shownWallpaperID(on: candidate.id)
-                return StatusMenuModel.Display(
-                    id: candidate.id, title: candidate.title, wallpaperID: shown,
-                    canPrevious: store.previousWallpaperID(displayId: candidate.id) != nil,
-                    canNext: canActivateNextWallpaper(store: store, displayId: candidate.id),
-                    canRandom: randomPool.contains { $0 != shown },
-                    recent: store.history.recent(on: candidate.id, available: available).map {
-                        StatusMenuModel.Recent(id: $0, title: wallpapers[$0] ?? $0)
-                    })
-            }
-        }
-        // Not while the app starts or quits, when opening Discover would not be wanted.
-        let downloads = store != nil && !shutdownInProgress && !shutdownComplete
-            ? StatusMenuModel.DownloadActivity.make(workshopStore.downloader.inProgressTransfers) : nil
-        return StatusMenuModel.Input(
-            playbackIsCurrent: playbackSnapshotCurrent,
-            hasActiveWallpapers: !(store?.appSnapshot.activeWallpaperIds.isEmpty ?? true),
-            paused: store?.appSnapshot.playbackState == .paused,
-            wallpapersMuted: PlaybackPreferences.shared.wallpapersMuted,
-            downloads: downloads,
-            displays: displays, canLockScreen: ScreenLock.isAvailable)
-    }
-
-    private func statusMenuItems(for entries: [StatusMenuModel.Entry]) -> [NSMenuItem] {
-        entries.map { entry -> NSMenuItem in
-            switch entry {
-            case .separator:
-                return .separator()
-            case .command(let command, let title, let checked):
-                let item = NSMenuItem(title: title, action: #selector(statusMenuItemChosen(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = command
-                item.state = checked ? .on : .off
-                return item
-            case .submenu(let title, let entries):
-                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-                let submenu = NSMenu()
-                statusMenuItems(for: entries).forEach(submenu.addItem)
-                item.submenu = submenu
-                return item
-            }
-        }
-    }
-
-    /// One action for every status menu item that runs a command: switching goes through the
-    /// same path as a link or a shortcut key, so it shares the display's queue slot and shows
-    /// a failure at the foot of the menu.
-    @objc private func statusMenuItemChosen(_ sender: NSMenuItem) {
-        guard let command = sender.representedObject as? StatusMenuModel.Command else { return }
-        switch command {
-        case .openControlPanel:
-            openControlPanel()
-        case .openDownloads:
-            showDiscover()
-        case .playPause:
-            togglePlayback()
-        case .toggleMute:
-            runAutomation(.toggleMute)
-        case .previous(let display):
-            runAutomation(.previous(display: display))
-        case .next(let display):
-            guard let store, !shutdownInProgress, !shutdownComplete,
-                  canActivateNextWallpaper(store: store, displayId: display)
-            else { return }
-            runAutomation(.next(display: display))
-        case .random(let display):
-            runAutomation(.random(display: display, pool: .all))
-        case .apply(let id, let display), .startAgain(let id, let display):
-            runAutomation(.apply(wallpaperID: id, display: display))
-        case .remove(let display):
-            runAutomation(.removeWallpaper(display: display))
-        case .openInPanel(let display):
-            // The panel's own target check, since the display may have changed since the menu opened.
-            if let store, store.settingsSnapshot.displays.contains(where: {
-                $0.displayId == display && $0.enabled && $0.mode == .standalone
-            }) {
-                controlPanelNavigation.targetDisplayID = display
-            }
-            showControlPanel(selection: .wallpaper)
-        case .lockScreen:
-            lockScreen()
-        }
-    }
-
-    @objc private func openControlPanel() {
-        showControlPanel(selection: .wallpaper)
-    }
-
     /// Discover, which lists the downloads; a first visit starts its search, as the link to it does.
-    private func showDiscover() {
+    func showDiscover() {
         if !workshopStore.hasLoaded && !workshopStore.isLoading { workshopStore.search() }
         showControlPanel(selection: .workshop)
-    }
-
-    @objc func openSettings() {
-        showControlPanel(selection: .settings)
-    }
-
-    @objc func checkForUpdates() {
-        controlPanelNavigation.revealSettingsSection(.about)
-        showControlPanel(selection: .settings)
-        Task { _ = await appUpdater.checkForUpdates() }
-    }
-
-    /// Checks at launch and every six hours after, because a menu-bar app can run for weeks
-    /// without relaunching. `Task.sleep` follows the continuous clock, so a Mac that slept
-    /// through the interval checks as soon as it wakes.
-    private func startAutomaticUpdates() {
-        guard automaticUpdates == nil else { return }
-        automaticUpdates = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.runAutomaticUpdate()
-                try? await Task.sleep(for: .seconds(6 * 60 * 60))
-            }
-        }
     }
 
     /// Asks the Workshop about installed items at most once a day, unless turned off; the
@@ -1782,81 +1657,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             installed: store.librarySnapshot.wallpapers.map(\.id), library: ClientPaths.libraryURL)
     }
 
-    private func runAutomaticUpdate() async {
-        checkWorkshopUpdatesIfDue()
-        let state = await appUpdater.checkInBackground()
-        rebuildMenu()
-        offerUpdateIfNeeded(state)
-    }
-
-    /// Offers the update in `state` once per version, but only when `UpdatePromptGate` says an
-    /// alert would not interrupt (not over a full-screen app, a locked screen or a sleeping
-    /// display). A held prompt is not marked offered; `retryHeldUpdatePrompt` asks again
-    /// without a network check when one of the gate's inputs changes.
-    private func offerUpdateIfNeeded(_ state: AppUpdateState) {
-        let version: String?
-        switch state {
-        case .ready(_, let ready): version = ready
-        case .available(_, let available), .manual(_, let available): version = available
-        default: version = nil
-        }
-        switch updatePrompts.offer(version: version, input: updatePromptInput()) {
-        case .none:
-            return
-        case .held(let reason, let isNew):
-            if isNew { AppLog.info("update prompt deferred: \(reason.rawValue)") }
-        case .present(let version):
-            if case .ready = state {
-                promptUpdate(
-                    title: String(localized: "WallpaperMachine \(version) is ready to install"),
-                    detail: String(localized: "It has been downloaded. WallpaperMachine quits and reopens to finish installing it."),
-                    confirm: String(localized: "Restart to Update"),
-                    confirmed: installDownloadedUpdate)
-            } else {
-                promptUpdate(
-                    title: String(localized: "WallpaperMachine \(version) is available"),
-                    detail: String(localized: "See what's new and download it in Settings."),
-                    confirm: String(localized: "View Update"),
-                    confirmed: showUpdate)
-            }
-        }
-    }
-
-    private func updatePromptInput() -> UpdatePromptGate.Input {
-        UpdatePromptGate.Input(
-            panelVisibleAndActive: controlPanelWindow.map { $0.isVisible && $0.isKeyWindow } ?? false,
-            globalPresentation: presentationPolicy?.globalPresentation ?? .running,
-            hasSuspendedDisplay: presentationPolicy?.hiddenDisplayIDs.isEmpty == false,
-            whatsNewOpen: whatsNewWindow != nil,
-            shuttingDown: shutdownInProgress || shutdownComplete)
-    }
-
-    /// Asks again for a prompt the gate held, with the update state the app already has.
-    private func retryHeldUpdatePrompt() {
-        guard updatePrompts.holdReason != nil else { return }
-        offerUpdateIfNeeded(appUpdater.state)
-    }
-
-    /// Shown from the main run loop, not this task: a modal run inside a main-actor task would
-    /// stall every other main-actor task until the alert closes.
-    private func promptUpdate(title: String, detail: String, confirm: String, confirmed: @escaping () -> Void) {
-        AppUpdateStore.performOnMainRunLoop { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !self.shutdownInProgress, !self.shutdownComplete else { return }
-                let alert = NSAlert()
-                alert.messageText = title
-                alert.informativeText = detail
-                alert.addButton(withTitle: confirm)
-                alert.addButton(withTitle: String(localized: "Later"))
-                NSApp.activate(ignoringOtherApps: true)
-                guard alert.runModal() == .alertFirstButtonReturn, !self.shutdownInProgress else { return }
-                confirmed()
-            }
-        }
-    }
-
-    /// An error alert, shown from the main run loop for the reason `promptUpdate` gives; the
-    /// callers run inside main-actor tasks and main-queue jobs.
+    /// An error alert, shown from the main run loop: a modal run inside a main-actor task would
+    /// stall every other main-actor task until the alert closes. The callers run inside
+    /// main-actor tasks and main-queue jobs.
     private func presentErrorAlert(_ error: Error, bringForward: Bool = false) {
         AppUpdateStore.performOnMainRunLoop { [weak self] in
             MainActor.assumeIsolated {
@@ -1868,136 +1671,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
-    /// "Later" leaves the update one click away in the status menu.
-    private func updateMenuItem() -> NSMenuItem? {
-        switch appUpdater.state {
-        case .ready(_, let version):
-            return menuItem("Restart to Update to \(version)", action: #selector(installDownloadedUpdate))
-        case .available(_, let version), .manual(_, let version):
-            return menuItem("WallpaperMachine \(version) Available…", action: #selector(showUpdate))
-        default:
-            return nil
-        }
-    }
-
-    @objc private func installDownloadedUpdate() {
-        Task {
-            await appUpdater.installUpdate()
-            // A failed install explains itself, and offers GitHub Releases, in About.
-            if case .error = appUpdater.state { showUpdate() }
-        }
-    }
-
-    @objc private func showUpdate() {
+    /// Settings › About, which also explains updates.
+    func showAboutSettings() {
         controlPanelNavigation.revealSettingsSection(.about)
         showControlPanel(selection: .settings)
     }
 
-    private func showWhatsNewAfterUpdate() {
-        guard !shutdownInProgress, whatsNewWindow == nil else { return }
-        do {
-            let history = try AppReleaseHistory()
-            guard let announcement = whatsNewStore.announcement(
-                history: history, existingUser: ClientPreferences.defaults.bool(forKey: WebPanelController.welcomeSeenKey)
-            ) else { return }
-            let window = NSWindow(
-                contentRect: NSRect(origin: .zero, size: WhatsNewViewController.defaultContentSize),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered, defer: false)
-            window.title = String(localized: "What’s New")
-            window.isReleasedWhenClosed = false
-            window.delegate = self
-            window.contentViewController = WhatsNewViewController(
-                announcement: announcement, preferences: whatsNewStore,
-                initialLanguage: AppLanguageStore.shared.effective,
-                close: { [weak window] in window?.performClose(nil) })
-            window.contentMinSize = NSSize(width: 600, height: 480)
-            // Installing a controller can resize the window to its content view's fitting size.
-            window.setContentSize(WhatsNewViewController.defaultContentSize)
-            window.center()
-            ControlPanelWindow.moveToActiveSpace(window)
-            whatsNewWindow = window
-            NSApp.setActivationPolicy(.regular)
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            whatsNewStore.didPresent(announcement)
-        } catch {
-            AppLog.error("Bundled release history could not load: \(error.localizedDescription)")
-        }
-    }
-
-    private func showControlPanel(selection: SidebarSelection) {
+    func showControlPanel(selection: SidebarSelection) {
         controlPanelNavigation.selection = selection
         NSApp.setActivationPolicy(.regular)
-
-        if let controlPanelWindow {
-            ControlPanelWindow.constrainToScreen(controlPanelWindow)
-            ControlPanelWindow.bringForward(controlPanelWindow)
+        if let window = controlPanelWindow {
+            ControlPanelWindow.constrainToScreen(window)
+            ControlPanelWindow.bringForward(window)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
-        let controller: NSHostingController<AnyView>
-        if let store {
-            controller = NSHostingController(
-                rootView: AnyView(
-                    ControlPanelView(
-                        store: store,
-                        navigation: controlPanelNavigation,
-                        workshop: workshopStore,
-                        pixiv: pixivStore,
-                        updater: appUpdater,
-                        imports: libraryImports
-                    )
-                )
-            )
-        } else {
-            controller = NSHostingController(
-                rootView: AnyView(BridgeUnavailableView(error: startupError ?? lastError))
-            )
-        }
-
-        // AppKit owns this resizable window's bounds; content must accept its proposal
-        // instead of promoting a long label or a split pane's ideal width to a window minimum.
-        controller.sizingOptions = []
-        let window = ControlPanelWindow.make(contentViewController: controller, delegate: self)
-        let frameName = ControlPanelWindow.frameAutosaveName
-        if !window.setFrameUsingName(frameName) { window.center() }
+        let hosting = NSHostingController(rootView: controlPanelRoot())
+        // The window keeps its own size floor, and the hosted toolbar and title belong to it.
+        hosting.sizingOptions = []
+        hosting.sceneBridgingOptions = [.toolbars, .title]
+        let window = ControlPanelWindow.make(contentViewController: hosting, delegate: self)
+        if !window.setFrameUsingName(ControlPanelWindow.frameAutosaveName) { window.center() }
         ControlPanelWindow.constrainToScreen(window)
-        window.setFrameAutosaveName(frameName)
-
+        // After the saved frame is restored, so restoring does not overwrite it.
+        window.setFrameAutosaveName(ControlPanelWindow.frameAutosaveName)
         controlPanelWindow = window
-        window.makeKeyAndOrderFront(nil)
+        ControlPanelWindow.bringForward(window)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func togglePlayback() {
-        guard let store,
-              !shutdownInProgress,
-              !shutdownComplete,
-              playbackSnapshotCurrent,
-              !store.appSnapshot.activeWallpaperIds.isEmpty
-        else {
-            return
+    /// The panel over the open library, or what says why there is none.
+    private func controlPanelRoot() -> AnyView {
+        if let store {
+            return AnyView(ControlPanelView(
+                store: store, navigation: controlPanelNavigation, workshop: workshopStore,
+                pixiv: pixivStore, updater: updates.updater, imports: libraryImports))
         }
-
-        Task {
-            do {
-                if store.appSnapshot.playbackState == .paused {
-                    try await store.playAllAsync()
-                } else {
-                    try await store.pauseAllAsync()
-                }
-                lastError = nil
-                playbackSnapshotCurrent = true
-                rebuildMenu()
-            } catch {
-                lastError = error
-                playbackSnapshotCurrent = false
-                rebuildMenu()
-                presentErrorAlert(error)
-            }
-        }
+        let error = startupError ?? lastError
+        return AnyView(BridgeUnavailableView(
+            error: error,
+            useThisMac: error is StorageUnavailableError ? { [weak self] in self?.keepLibraryOnThisMac() } : nil))
     }
 
     /// A display whose playlist rotates moves along the playlist; any other display takes the
@@ -2020,6 +1734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 return try await loader.validate(request)
             }, makeSurface: { request, generation in
                 if request.kind == .web { return WebWallpaperPreviewSurface(request: request, generation: generation) }
+                if request.kind == .video { return VideoWallpaperPreviewSurface(request: request) }
                 return SceneWallpaperPreviewSurface(request: request)
             })
             let controller = WallpaperPreviewWindowController(session: session, displayAspect: { [weak store] displayID in
@@ -2032,9 +1747,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self.previewWindow = nil
                 self.wallpaperEnergy?.invalidate()
                 self.telemetry?.invalidateFrames()
-                if self.controlPanelWindow?.isVisible != true, self.whatsNewWindow == nil {
-                    NSApp.setActivationPolicy(.accessory)
-                }
+                self.leaveDockUnlessAWindowIsOpen()
             }
             previewWindow = controller
         }
@@ -2042,7 +1755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         previewWindow?.present(selection)
     }
 
-    private func canActivateNextWallpaper(store: BridgeStore, displayId: String) -> Bool {
+    func canActivateNextWallpaper(store: BridgeStore, displayId: String) -> Bool {
         if PlaylistStore.shared.playlist(for: displayId).mode == .rotate {
             return playlistScheduler?.canSkip(displayId) ?? false
         }
@@ -2050,8 +1763,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     /// Runs a command from a link, a keyboard shortcut or the menu bar. A failure shows in the
-    /// menu bar menu, as one from the menu itself does.
-    private func runAutomation(_ command: AutomationCommand) {
+    /// menu bar menu, as one from the menu itself does, and in an alert too when `alertsOnFailure`.
+    func runAutomation(_ command: AutomationCommand, alertsOnFailure: Bool = false) {
         Task {
             do {
                 try await AppAutomation.shared.perform(command)
@@ -2059,6 +1772,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             } catch {
                 lastError = error
                 AppLog.warn("\(String(describing: command)) failed: \(error.localizedDescription)")
+                if alertsOnFailure { presentErrorAlert(error) }
             }
             rebuildMenu()
         }
@@ -2071,14 +1785,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let store, !shutdownInProgress, !shutdownComplete else { throw AutomationError.notReady }
         switch command {
         case .play, .pause, .togglePlayback:
-            try await store.commands.run {
-                let paused = store.appSnapshot.playbackState == .paused
-                let play = command == .play || (command == .togglePlayback && paused)
-                if play, paused {
-                    try await store.playAllAsync()
-                } else if !play, !paused {
-                    try await store.pauseAllAsync()
+            do {
+                try await store.commands.run {
+                    let paused = store.appSnapshot.playbackState == .paused
+                    let play = command == .play || (command == .togglePlayback && paused)
+                    if play, paused {
+                        try await store.playAllAsync()
+                    } else if !play, !paused {
+                        try await store.pauseAllAsync()
+                    }
                 }
+            } catch {
+                // What playback is in is not known until the next snapshot.
+                playbackSnapshotCurrent = false
+                throw error
             }
             playbackSnapshotCurrent = true
         case .mute, .unmute, .toggleMute:
@@ -2116,7 +1836,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // The pick is made when the display's turn comes; see `activateRandomWallpaperAsync`.
             try await store.activateRandomWallpaperAsync(
                 displayId: try automationDisplay(display, store: store), pool: pool,
-                favorites: Self.favoriteWallpaperIDs(), playlists: .shared)
+                favorites: PanelPreferences.favorites(), playlists: .shared)
         case .apply(let id, let display):
             let displayId = try automationDisplay(display, store: store)
             guard store.librarySnapshot.wallpapers.contains(where: { $0.id == id }) else {
@@ -2175,7 +1895,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private static func availableAutomationDisplays(store: BridgeStore) -> [BridgeDisplaySettingsRow] {
         StatusMenuModel.eligibleDisplays(store.settingsSnapshot.displays,
-                                         connected: Set(WebWallpaperHost.systemScreens().map(\.id)))
+                                         connected: Set(SystemDisplays.screens().map(\.id)))
     }
 
     /// The display a command names, or the panel's target display; only an enabled display
@@ -2188,12 +1908,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return id
     }
 
-    @objc private func lockScreen() {
-        ScreenLock.lock()
+    /// The library's drive is gone for good: from the next launch the library is WallpaperMachine's
+    /// own folder on this Mac again. Nothing on the drive is touched. Quits, since the library a
+    /// running app was started without cannot be opened in place.
+    private func keepLibraryOnThisMac() {
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Keep the wallpaper library on this Mac?")
+        alert.informativeText = String(localized: "From the next launch WallpaperMachine keeps its library in its own folder on this Mac, so the wallpapers on the drive are not shown. Nothing on the drive is deleted. WallpaperMachine quits now; open it again afterwards.")
+        alert.addButton(withTitle: String(localized: "Use This Mac and Quit"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try StorageLocation.write(nil, support: ClientPaths.supportURL)
+        } catch {
+            AppLog.error("storage: could not go back to this Mac: \(error.localizedDescription)")
+            NSAlert(error: error).runModal()
+            return
+        }
+        AppLog.info("storage: the library is in WallpaperMachine's folder on this Mac from the next launch")
+        NSApp.terminate(nil)
     }
 
-    @objc private func exitApplication() {
-        NSApp.terminate(nil)
+    /// See `StorageVolumeMonitor`: it observes nothing unless the library is on another disk than
+    /// the startup disk. Its stop reaches the wallpapers through the presentation policy.
+    private func startLibraryDriveMonitor() {
+        let monitor = StorageVolumeMonitor { [weak self] in
+            do {
+                try await self?.store?.refreshLibraryAsync()
+            } catch {
+                AppLog.warn("storage: the library could not be read again after its drive returned: \(error.localizedDescription)")
+            }
+        }
+        monitor.onChange = { [weak self] in
+            guard let self, !self.shutdownInProgress, !self.shutdownComplete else { return }
+            // A preview plays from the library too, and holds its files open.
+            if self.libraryDrive?.stopsWallpapers == true { self.previewWindow?.close() }
+            self.presentationPolicy?.evaluate()
+        }
+        monitor.onDriveConnectedAfterLaunch = { [weak self] in self?.openLibraryAfterLaunch() }
+        libraryDrive = monitor
+        monitor.start()
+    }
+
+    /// The drive the app launched without is connected: the library opens in place with every
+    /// service a launch starts over it, and an open panel shows it instead of the unavailable page.
+    private func openLibraryAfterLaunch() {
+        guard store == nil, !shutdownInProgress, !shutdownComplete else { return }
+        ClientPaths.reloadStorageLocation()
+        openLibrary()
+        if store != nil {
+            AppLog.info("storage: the library opened without a relaunch")
+            // The launch's sweep looked where the drive was not.
+            removeAbandonedStaging()
+            startLibraryServices()
+        }
+        // The library, or why it still cannot open.
+        (controlPanelWindow?.contentViewController as? NSHostingController<AnyView>)?.rootView = controlPanelRoot()
+        rebuildMenu()
+    }
+
+    /// A crash during a download leaves its staging behind, holding the whole downloaded item:
+    /// SteamCMD's half in app support, what it fetched beside the library. Swept in the background
+    /// at launch, and again when the library opens later (`openLibraryAfterLaunch`); each sweep
+    /// keeps staging a download or an import still claims, or wrote to recently.
+    private func removeAbandonedStaging() {
+        let stagingRoots = FileLocation.isSame(ClientPaths.supportURL, ClientPaths.storageURL)
+            ? [ClientPaths.supportURL] : [ClientPaths.supportURL, ClientPaths.storageURL]
+        let pixivStagingRoot = PixivWallpaperPackager.stagingRoot(forLibrary: ClientPaths.libraryURL)
+        let importStagingRoot = WallpaperImportService.stagingRoot(forLibrary: ClientPaths.libraryURL)
+        Task.detached(priority: .utility) {
+            for root in stagingRoots { WorkshopDownloader.removeAbandonedStaging(in: root) }
+            PixivWallpaperPackager.removeAbandonedStaging(in: pixivStagingRoot)
+            WallpaperImportService.removeAbandonedStaging(in: importStagingRoot)
+        }
     }
 
     private func bootstrapStore() {
@@ -2236,53 +2023,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             rebuildMenu()
             // Also after a failed start: the update may be the fix.
-            startAutomaticUpdates()
+            updates.startAutomaticChecks()
         }
     }
 
-    private func refreshStoreSnapshot() {
-        guard let store,
-              !shutdownInProgress,
-              !shutdownComplete
-        else {
-            return
-        }
-
-        Task {
+    func refreshStoreSnapshot() {
+        guard let store, !shutdownInProgress, !shutdownComplete else { return }
+        Task { [weak self] in
             do {
                 try await store.refreshAllAsync()
-                lastError = nil
-                playbackSnapshotCurrent = true
+                self?.lastError = nil
+                self?.playbackSnapshotCurrent = true
             } catch {
-                lastError = error
-                playbackSnapshotCurrent = false
+                self?.lastError = error
+                self?.playbackSnapshotCurrent = false
             }
-            rebuildMenu()
+            self?.rebuildMenu()
         }
     }
 
     /// Whether the bridge took the refresh.
     private func refreshDisplaysFromSystemEvent() async -> Bool {
-        guard let store,
-              !shutdownInProgress,
-              !shutdownComplete
-        else {
-            return false
-        }
-
-        let refreshed: Bool
+        guard let store, !shutdownInProgress, !shutdownComplete else { return false }
+        let accepted: Bool
         do {
             try await store.refreshDisplaysAsync()
             lastError = nil
             playbackSnapshotCurrent = true
-            refreshed = true
+            accepted = true
         } catch {
             lastError = error
             playbackSnapshotCurrent = false
-            refreshed = false
+            accepted = false
         }
         rebuildMenu()
-        return refreshed
+        return accepted
     }
 
     /// The applied desktop Scenes that have consented to now-playing.
@@ -2302,26 +2077,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     /// The content layers of the wallpaper windows showing on a display, the front one first.
-    /// A window that was closed is no longer ordered in, so it is not listed.
-    private static func wallpaperLayers(on displayID: UInt32) -> [CALayer] {
+    /// A window that was closed is no longer ordered in, so it is not listed, and neither is one
+    /// kept paused for another desktop (`excluding`).
+    private static func wallpaperLayers(on displayID: UInt32, excluding kept: Set<Int>) -> [CALayer] {
         WallpaperPresentationPolicy.orderedWallpaperWindows().compactMap { window in
-            guard window.isVisible, let screen = window.screen,
+            guard window.isVisible, !kept.contains(window.windowNumber), let screen = window.screen,
                   SystemDesktopPictureWorkspace.id(screen) == String(displayID) else { return nil }
             return window.contentView?.layer
         }
     }
 
-}
-
-private struct BridgeUnavailableView: View {
-    let error: Error?
-
-    var body: some View {
-        ContentUnavailableView(
-            "Bridge Unavailable",
-            systemImage: "exclamationmark.triangle",
-            description: Text(error?.localizedDescription ?? String(localized: "The rendering bridge could not be started."))
-        )
-        .frame(minWidth: 640, minHeight: 420)
-    }
 }

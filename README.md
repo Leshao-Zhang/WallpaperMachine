@@ -1,8 +1,8 @@
-<!-- README.zh-CN.md is this page in 简体中文: change both together.
+<!-- README.zh-CN.md is this page in 简体中文, README.ko.md in 한국어 and README.pt-BR.md in Português: change them together.
      The hero is six real WallpaperMachine renders on a macOS 27 desktop (menu bar and Dock drawn from
      system assets), uploaded as a GitHub attachment. When it changes, update the alt text below and the
      wallpaper credits at the end. -->
-<p align="center"><sub><b>English</b>&ensp;·&ensp;<a href="README.zh-CN.md">简体中文</a></sub></p>
+<p align="center"><sub><b>English</b>&ensp;·&ensp;<a href="README.zh-CN.md">简体中文</a>&ensp;·&ensp;<a href="README.ko.md">한국어</a>&ensp;·&ensp;<a href="README.pt-BR.md">Português</a></sub></p>
 
 <a href="https://www.wallpapermachine.app">
   <img src="https://github.com/user-attachments/assets/df92d34d-b718-4d58-b8e9-b002c4915516" width="100%" alt="A Mac desktop cycling through six live wallpapers played by WallpaperMachine: Chisaki over rippling water, Lucy on the Moon, a Red Bull F1 car in the snow, Firefly at dusk, Ellen at a rainy bus stop and Into The Abyss, under the macOS menu bar and Dock.">
@@ -18,7 +18,7 @@
 <p align="center">
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/releases/latest"><img src="https://img.shields.io/github/v/release/WallpaperMachine/WallpaperMachine?label=version&color=0a84ff" alt="Latest version"></a>
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/actions/workflows/version.yml"><img src="https://img.shields.io/github/actions/workflow/status/WallpaperMachine/WallpaperMachine/version.yml?branch=main&label=build" alt="Build and release status"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/WallpaperMachine/WallpaperMachine?color=blue" alt="License: GPL-2.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/WallpaperMachine/WallpaperMachine?color=blue" alt="License: GPL-3.0"></a>
   <img src="https://img.shields.io/badge/macOS_15%2B-Apple_silicon_and_Intel-111111?logo=apple&logoColor=white" alt="macOS 15 or later on Apple silicon and Intel">
   <a href="https://github.com/WallpaperMachine/WallpaperMachine/stargazers"><img src="https://img.shields.io/github/stars/WallpaperMachine/WallpaperMachine" alt="GitHub stars"></a>
 </p>
@@ -45,14 +45,14 @@
 </p>
 
 <!-- The screenshot is a GitHub attachment, hosted by issue #37 ("README app screenshot"). When it
-     changes, upload the new one there and update the alt text and caption below, here and in
-     README.zh-CN.md. -->
+     changes, upload the new one there and update the alt text and caption below, here, in
+     README.zh-CN.md, in README.ko.md and in README.pt-BR.md. -->
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/1284cc37-34eb-4618-b4b1-efe7c2ce8127" width="100%" alt="WallpaperMachine’s window on the Installed tab: filters for collections, type, age rating and tags on the left, a grid of Steam Workshop wallpapers in the middle, and the selected wallpaper’s preview, compatibility check and options in the inspector on the right.">
+  <img src="https://github.com/user-attachments/assets/9526d41a-4764-4df9-a678-22d75982a7fd" width="100%" alt="WallpaperMachine’s window in the dark appearance: the Library, Steam Workshop, pixiv and Settings tabs across the top, a grid of installed wallpapers with the active one marked, the active wallpaper’s preview, compatibility check and options in the inspector on the right, and what is playing along the bottom.">
 </p>
 
 <p align="center">
-  <sub>Filters on the left, your library in the middle, the selected wallpaper’s options on the right. Press play and it becomes your desktop.</sub>
+  <sub>Your library in the middle, the selected wallpaper’s options on the right, what is playing along the bottom. Apply wallpaper and it becomes your desktop.</sub>
 </p>
 
 <p align="center">
@@ -63,8 +63,15 @@
 
 1. **Download** the [free disk image](https://www.wallpapermachine.app/download) for the latest version.
 2. **Install**: open it and drag WallpaperMachine to Applications.
-3. **Open it.** The download isn't notarized yet, so macOS holds the first launch:
-   click **Open Anyway** in System Settings → Privacy & Security, once.
+3. **Open it.** Releases after 1.8.2 are notarized by Apple and open right away.
+   1.8.2 and older aren't, so macOS holds their first launch: click **Open Anyway**
+   in System Settings → Privacy & Security, once.
+
+Using [Homebrew](https://brew.sh)? One command does the first two steps:
+
+```bash
+brew install --cask wallpapermachine
+```
 
 A first-run guide takes it from there, and the app updates itself from then on.
 The [install guide](https://www.wallpapermachine.app/guides/install/) walks through
@@ -80,8 +87,10 @@ Rather build it yourself? It takes two commands: see
 
 ## The app
 
-One window, four tabs: Discover, pixiv, Installed and Settings. The website runs that
-same interface on a demo library, so you can
+One window with tabs across the top: your library (all wallpapers, favorites and your
+collections), Steam Workshop and pixiv to browse, and Settings, with what is playing in a bar
+along the bottom. The website has a demo of it on a
+sample library, so you can
 [try it in your browser](https://www.wallpapermachine.app/#app). Close the
 window and the app keeps running in the menu bar, where you can pause, resume, mute
 or go to the previous, next or a random wallpaper, on each display separately when you have more than one. When it launches at login, it starts there
@@ -89,29 +98,30 @@ without opening the window.
 
 | Feature | What it does |
 | --- | --- |
-| [**Apply**](docs/features/control-panel.md#selection-versus-apply) | Scene, video or [web](docs/features/web-wallpapers.md): press play and it becomes your desktop. Choosing a wallpaper only selects it. |
+| [**Apply**](docs/features/control-panel.md#selection-versus-apply) | Scene, video or [web](docs/features/web-wallpapers.md): Apply wallpaper and it becomes your desktop. Choosing a wallpaper only selects it. |
 | [**Preview**](docs/features/wallpaper-properties.md#live-preview) | Try an installed scene, video or web wallpaper in its own window, with the current options and separate playback controls, before changing the desktop. Sliders, colours and switches show in it as you change them. |
-| [**Workshop**](docs/features/workshop-downloads.md) | The live Steam Workshop, no sign-in to browse, with [collections, each author's wallpapers and your subscriptions](docs/features/workshop-downloads.md#collections-authors-and-subscriptions). Downloads run in the app, several at once, with a Steam account that owns Wallpaper Engine. [Updates](docs/features/workshop-downloads.md#updates) to the wallpapers you have are found once a day and installed in one click. |
+| [**Workshop**](docs/features/workshop-downloads.md) | The live Steam Workshop, no sign-in to browse, with [collections and each author's wallpapers, plus your subscriptions and favorites once you sign in to Steam](docs/features/workshop-downloads.md#collections-authors-and-subscriptions); signed in, subscribe or unsubscribe from the app, and read an item's newest [comments](docs/features/workshop-downloads.md#comments). Downloads run in the app, several at once, with a Steam account that owns Wallpaper Engine. [Updates](docs/features/workshop-downloads.md#updates) to the wallpapers you have are found once a day and installed in one click. |
 | [**pixiv**](docs/features/pixiv.md) | pixiv's illustration rankings and tag search. Save any page of a work as a still wallpaper; sign in to pixiv for members-only works and, if your account allows them, R-18. |
-| [**Settings**](docs/features/wallpaper-properties.md#properties) | Every option its artist made, saved when you apply your changes; [named property presets](docs/features/wallpaper-properties.md#property-presets) keep several versions and can be exported or imported. An optional switch in Settings [shows your edits on the desktop](docs/features/wallpaper-properties.md#showing-edits-on-the-desktop) as you make them. |
-| [**Music**](docs/features/audio-response.md) | Turn on Audio response and wallpapers made for sound move with what your Mac plays. Turn on [Media integration](docs/features/media-integration.md) and ones with a music display show the song that's on. |
-| [**Playlists**](docs/features/playlists.md) | Let each display rotate through all wallpapers, favorites, its own list or a [local collection](docs/features/control-panel.md#local-collections), on a timer or each time the Mac is unlocked. Reorder a list, save named playback plans, or switch between a day and a night wallpaper. Failed applications are skipped temporarily. |
-| [**Displays**](docs/features/control-panel.md#target-display) | Every display gets its own wallpaper, or mirrors another, with its own scaling, position, frame rate and volume. [Apply one wallpaper to every display, copy or swap wallpapers and save multi-display arrangements](docs/features/display-layouts.md) to restore their wallpaper choices from Settings or Shortcuts. |
-| [**Battery**](docs/features/performance.md#playback) | On battery, keep running, drop to a render scale and frame rate you choose, or pause. Low Power Mode, a hot Mac and a low battery can lower quality the same way instead of pausing. Off until you pick it. The rest of playback and quality is on [Performance](docs/features/performance.md). |
+| [**Settings**](docs/features/wallpaper-properties.md#properties) | Every option its artist made, plus [Wallpaper Engine’s own colour adjustments, image filters, flip, mouse parallax and playback rate](docs/features/wallpaper-properties.md#wallpaper-engine-options) for scenes and videos, saved when you apply your changes; [named property presets](docs/features/wallpaper-properties.md#property-presets) keep several versions and can be exported or imported. An optional switch in Settings [shows your edits on the desktop](docs/features/wallpaper-properties.md#showing-edits-on-the-desktop) as you make them. |
+| [**Music**](docs/features/audio-response.md) | Turn on Audio response and wallpapers made for sound move with what your Mac plays. [Media integration](docs/features/media-integration.md) is on by default, so ones with a music display show the song that's on. |
+| [**Playlists**](docs/features/playlists.md) | Let each display rotate through all wallpapers, favorites, its own list or a [local collection](docs/features/control-panel.md#local-collections), on a timer or each time the Mac is unlocked; Play or Shuffle on a collection starts one in a click. Reorder a list, save named playback plans, or switch between a day and a night wallpaper. Failed applications are skipped temporarily. |
+| [**Displays**](docs/features/control-panel.md#target-display) | Every display gets its own wallpaper, or mirrors another, with its own scaling, position, frame rate and volume. [Fit with blurred backdrop](docs/features/wallpaper-properties.md#fit-with-blurred-backdrop) shows a wallpaper whole on a screen of another shape and fills the edges with a blurred copy instead of black bars. [Apply one wallpaper to every display, copy or swap wallpapers and save multi-display arrangements](docs/features/display-layouts.md) to restore their wallpaper choices from Settings or Shortcuts. |
+| [**Battery**](docs/features/performance.md#playback) | On battery, keep running, drop to a render scale and frame rate you choose, pause, or pause only while you work in other apps. Low Power Mode, a hot Mac and a low battery can lower quality the same way instead of pausing. Off until you pick it. The rest of playback and quality is on [Performance](docs/features/performance.md). |
 | [**Energy**](docs/features/performance.md#energy-use) | Settings → Performance shows the power the app draws and, on a laptop, its share of a full charge per hour. Change a setting there and it compares before and after. Each installed wallpaper gets its own rating once it has been measured. |
-| [**Native**](docs/features/appearance.md) | Light, dark and your accent colour, like the rest of macOS, in English, [简体中文, 繁體中文 or 日本語](docs/features/control-panel.md#language). |
-| [**Import**](docs/features/control-panel.md#downloads-and-import) | Bring the Wallpaper Engine folders you already have, or your own videos and pictures. Drop them on the Dock icon or use Import; the app copies them and leaves the originals alone. |
+| [**Native**](docs/features/appearance.md) | Light, dark and your accent colour, like the rest of macOS, in English, [简体中文, 繁體中文, 日本語, 한국어 or Português](docs/features/control-panel.md#language). |
+| [**Import**](docs/features/control-panel.md#downloads-and-import) | Bring the Wallpaper Engine folders you already have, or your own videos and pictures. Drop them on the library or the Dock icon, or use Import; the app copies them and leaves the originals alone. |
 | [**Keep your setup**](docs/features/backup-restore.md#local-backup-and-restore) | Export settings and retained files, optionally the whole wallpaper library; preview conflicts before a recoverable restore at the next launch. Sign-ins and passwords stay on this Mac. |
+| [**External drive**](docs/features/library-location.md) | Keep the wallpaper library and downloads on an external drive or in another folder, and move them back to this Mac at any time. Settings and Steam sign-ins stay on this Mac. |
 | [**Picture placement**](docs/features/wallpaper-properties.md#image-placement) | Drag, position and zoom imported pictures and saved pixiv pages separately for each display, without changing the original image. |
-| [**Out of sight, paused**](docs/architecture.md#desktop-wallpaper-windows-and-private-api-handling) | A covered display stops its own wallpaper, and sleep or lock pauses them all. [Playback rules](docs/features/performance.md#playback) can also pause or mute them while another app plays sound, while an app you choose is running or in front, when the battery is low, in Low Power Mode, when the Mac runs hot, or during a Focus. With several displays, you can also keep only the one you are using playing. Your own pause stays yours. |
-| [**Automation**](docs/features/automation.md) | Weekday and time schedules, local sunrise/sunset calculations, light/dark appearance choices, experimental [desktop Space choices](docs/features/spaces.md), and temporary Focus wallpapers or playlists. Keyboard shortcuts, Shortcuts, Siri, Spotlight and links can control playback, mute every wallpaper, pick a random wallpaper, and apply wallpapers, saved playlists or property presets. |
-| [**Lock screen**](docs/features/lock-screen.md) | Video and scene wallpapers can animate the lock screen too. Experimental and off by default. |
+| [**Out of sight, paused**](docs/architecture.md#desktop-wallpaper-windows-and-private-api-handling) | A covered display stops its own wallpaper, and sleep or lock pauses them all. [Playback rules](docs/features/performance.md#playback) can also pause or mute them while another app plays sound, while any other app or one you choose is in front, while an app you choose is running, when the battery is low, in Low Power Mode, when the Mac runs hot, during a Focus, or once nobody has touched the keyboard, mouse or trackpad for a while. With several displays, you can also keep only the one you are using playing. Your own pause stays yours. |
+| [**Automation**](docs/features/automation.md) | Weekday and time schedules, local sunrise/sunset calculations, light/dark appearance choices, [a different wallpaper for each desktop](docs/features/spaces.md), and temporary Focus wallpapers or playlists. Keyboard shortcuts, Shortcuts, Siri, Spotlight and links can control playback, mute every wallpaper, pick a random wallpaper, and apply wallpapers, saved playlists or property presets. |
+| [**Lock screen**](docs/features/lock-screen.md) | Scene, video, web and still wallpapers can animate the lock screen too. Experimental and off by default. |
 | [**Screen saver**](docs/features/lock-screen.md#use-wallpaper-as-screen-saver) | Use each display’s applied scene, video, web or still wallpaper as its screen saver. Independent of lock-screen animation; experimental on macOS 26+. |
 
 ## Why you can trust it
 
 - **Open source, all of it.** The app, its renderer and its scene engine are all in
-  this repository under GPL-2.0. There is no closed core and no paid features: the app
+  this repository under GPL-3.0-only. There is no closed core and no paid features: the app
   is the same for everyone.
 - **Built in public.** Every release is built and tested by
   [GitHub Actions](docs/release.md#build-buildyml) from a tagged commit, then
@@ -120,15 +130,20 @@ without opening the window.
   ```sh
   gh attestation verify WallpaperMachine-*-arm64.dmg --repo WallpaperMachine/WallpaperMachine
   ```
-- **No tracking.** The app goes online only for what you ask of it: Steam for the
+- **No tracking.** The app goes online for what you ask of it: Steam for the
   Workshop, pixiv when you open it, GitHub for update checks, and, only if you turn
   on [Send performance data](docs/features/telemetry.md), one small report a day
   with load times, frame rates and your Mac's model. That report has no names, files
-  or account details, and turning it off deletes what was sent. Sign-ins and
-  passwords stay on your Mac.
+  or account details, and turning it off deletes what was sent. Apart from that,
+  the app sends a [daily count](docs/features/telemetry.md#daily-active-count) that
+  it ran that day, with its version and no install ID, so we know how many Macs use
+  it. Sign-ins and passwords stay on your Mac.
 - **Updates it can check.** The built-in updater installs only a disk image whose
   SHA-256 matches the release; one it can't verify is
   [refused, never installed unchecked](docs/features/updates.md#downloading).
+  Where GitHub can't be reached, as in mainland China without a VPN, it fetches the
+  same files through [public GitHub download proxies](docs/features/updates.md#what-a-check-reads),
+  which can't change what installs.
 - **Actively maintained.** New versions ship often, and every one is written up
   in the [changelog](CHANGELOG.md), in English and 简体中文.
 - **Problems get a real path.** **Not working? Report on GitHub** in any
@@ -141,10 +156,10 @@ without opening the window.
 
 | Layer | What it does |
 | --- | --- |
-| **Swift shell** | The AppKit app. Its control panel is HTML in `WKWebView` ([`WebUI/`](WebUI)), and [web wallpapers](docs/features/web-wallpapers.md) run in web views of their own. |
-| **Rust core** | The vendored renderer ([`upstream/renderer`](upstream/renderer)): displays, wallpaper windows, video decode and audio capture, bridged to Swift with uniffi. |
-| **C++ scene engine** | Open Wallpaper Engine, statically linked into the Rust core, draws scene wallpapers. |
-| **Metal** | Scenes render natively on Metal, and a scene the native renderer cannot draw falls back to Vulkan on Metal through MoltenVK. AVFoundation video is opt-in under [Settings → Performance](docs/features/performance.md), where the scene renderer can also be set to Compatibility. |
+| **Swift shell** | The AppKit app. Its control panel is native SwiftUI ([`App/Views/ControlPanel`](App/Views/ControlPanel)), and [web wallpapers](docs/features/web-wallpapers.md) run in web views of their own. |
+| **Rust core** | The renderer ([`Renderer/`](Renderer)): displays, wallpaper windows, video decode and audio capture, bridged to Swift with uniffi. |
+| **C++ scene engine** | The project's scene engine ([`Renderer/Engine`](Renderer/Engine)), statically linked into the Rust core, draws scene wallpapers. |
+| **Metal** | Scenes render natively on Metal, and a scene the native renderer cannot draw is not drawn: it keeps its last picture and says why in [Settings → Performance](docs/features/performance.md). Video wallpapers play with the app's own players (AVFoundation, and a WebM player for WebM and Matroska files). |
 | **Lock screen** | A sandboxed ExtensionKit extension ([`Extension/`](Extension)). |
 
 How the pieces talk to each other: [docs/architecture.md](docs/architecture.md).
@@ -214,13 +229,31 @@ Steam account names are replaced first.
 
 Download the signed build free from the
 [latest release](https://github.com/WallpaperMachine/WallpaperMachine/releases/latest),
-or [build it from the source](#open-source-free-to-build). The build is not
-notarized, so macOS holds its first launch until you click Open Anyway in
-System Settings → Privacy & Security. The
+install the same signed disk image with
+[Homebrew](https://formulae.brew.sh/cask/wallpapermachine)
+(`brew install --cask wallpapermachine`), or
+[build it from the source](#open-source-free-to-build). The release has two
+disk images: `WallpaperMachine-<version>-arm64.dmg` for Apple silicon and
+`WallpaperMachine-<version>-x86_64.dmg` for Intel. Releases after 1.8.2
+are signed with a Developer ID and notarized by Apple, so they open right away;
+1.8.2 and older are not notarized, so macOS holds their first launch until you
+click Open Anyway in System Settings → Privacy & Security. The
 [install guide](https://www.wallpapermachine.app/guides/install/) walks through
 it, from the download to the first-run guide. From then on the app checks for
 new versions itself and, where it can replace its own copy, offers
-**Restart to Update**.
+**Restart to Update**. A copy installed with Homebrew updates itself the same way.
+
+</details>
+
+<details>
+<summary><b>Does it use my proxy?</b></summary>
+
+Yes, the macOS system proxy: browsing, previews and SteamCMD downloads all follow
+System Settings → Network → Details → Proxies, so there is no separate setting.
+A proxy app in rule mode still decides by host name, so if Steam downloads fail
+outside global mode, route `steamserver.net`, `steamcontent.com`,
+`steamcommunity.com` and `steampowered.com` through the proxy
+([details](docs/features/workshop-downloads.md#proxies)).
 
 </details>
 
@@ -228,18 +261,20 @@ new versions itself and, where it can replace its own copy, offers
 <summary><b>Is WallpaperMachine really free?</b></summary>
 
 Yes. The signed download is free, and the complete source is here if you
-would rather build it yourself. Becoming a Supporter adds a sponsor place on the
-website and in this README, plus priority support. It buys no license: the app
-is the same with or without it. What it includes and how to become one:
-[SPONSORS.md](SPONSORS.md).
+would rather build it yourself. Nothing you can pay for changes the app. To give,
+sponsor MMFoundation, which makes WallpaperMachine, on
+[Open Collective](https://opencollective.com/mmfoundation).
+[Priority Support](https://www.wallpapermachine.app/pricing/) is a paid service on
+the website that answers your questions first. It buys no license: the app is the
+same with or without it. Both are explained in [SPONSORS.md](SPONSORS.md).
 
 </details>
 
 <details>
 <summary><b>Where do I ask a question or suggest a feature?</b></summary>
 
-Questions go to [Discussions](https://github.com/WallpaperMachine/WallpaperMachine/discussions/categories/q-a),
-and ideas to a [feature request](https://github.com/WallpaperMachine/WallpaperMachine/issues/new?template=feature_request.yml).
+Questions go to [Discussions](https://github.com/WallpaperMachine/WallpaperMachine/discussions/categories/q-a)
+or MMFoundation's [Discord](https://mmfoundation.dev/discord), and ideas to a [feature request](https://github.com/WallpaperMachine/WallpaperMachine/issues/new?template=feature_request.yml).
 For a wallpaper that looks wrong, use **Not working? Report on GitHub** in its
 details. Security problems are reported privately: see [SECURITY.md](SECURITY.md).
 
@@ -249,11 +284,11 @@ details. Security problems are reported privately: see [SECURITY.md](SECURITY.md
 
 The complete source is here. It builds on an Apple silicon or Intel Mac, Xcode 26 (macOS 15.6 or later), a
 full Xcode selected with `xcode-select` and the Homebrew packages listed under
-[Prerequisites](docs/build.md#prerequisites); the renderer and scene engine are
-vendored under [`upstream/`](upstream), not pulled in as submodules.
+[Prerequisites](docs/build.md#prerequisites); the renderer and scene engine are in
+[`Renderer/`](Renderer), and third-party code is vendored under
+[`ThirdParty/`](ThirdParty), not pulled in as submodules.
 
 ```sh
-python3 scripts/install_ffmpeg.py                  # the project's LGPL FFmpeg build
 python3 scripts/build.py --configuration Release   # renderer, bindings, Xcode project, app
 ```
 
@@ -265,6 +300,8 @@ Scene wallpapers also need shared resources from a Wallpaper Engine you own.
 
 Toolchain, packaging and troubleshooting: [docs/build.md](docs/build.md).
 Working on the code: [CONTRIBUTING.md](CONTRIBUTING.md).
+Translating the app, or asking for another language: [Crowdin](https://translate.wallpapermachine.app/project/wallpaper-machine),
+no code needed ([how it reaches the app](docs/localization.md#contributing-translations)).
 
 ## Documentation
 
@@ -279,37 +316,39 @@ Working on the code: [CONTRIBUTING.md](CONTRIBUTING.md).
 | [docs/testing/README.md](docs/testing/README.md) | Test strategy, commands, evidence policy |
 | [docs/release.md](docs/release.md) | Versioning, release notes and the CI release pipeline |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each published version |
-| [LICENSING.md](LICENSING.md) | License policy, Supporter model and distribution status |
-| [SPONSORS.md](SPONSORS.md) | Supporter pricing, what it includes and other ways to help |
+| [LICENSING.md](LICENSING.md) | License, code origin, Priority Support and component licenses |
+| [SPONSORS.md](SPONSORS.md) | Sponsoring on Open Collective, Priority Support and other ways to help |
 | [AGENTS.md](AGENTS.md) | Rules for agents working in this repository |
 
-## Thank you. To every Supporter.
+## Thank you. To every Priority Support member.
 
-Supporters who choose to be shown are listed here and on the
-[sponsor wall](https://www.wallpapermachine.app/#sponsors). Supporter is a
-one-time purchase for a sponsor place and priority support; the app and its
-source stay free for everyone. If WallpaperMachine has earned a place on your
-desktop, [become a Supporter](SPONSORS.md).
+Priority Support members who choose to be shown are listed here and on the
+[thank-you wall](https://www.wallpapermachine.app/#sponsors). Those who bought it
+under its earlier name, Supporter, keep the place it promised them. New buyers can
+choose to appear on the thank-you wall. It's off by default and isn't part of what
+they buy.
+[Priority Support](https://www.wallpapermachine.app/pricing/) is a paid service
+that answers your questions first; the app and its source stay free for everyone.
+To sponsor the project, see [SPONSORS.md](SPONSORS.md).
 
-<!-- supporters:start: written by scripts/update_sponsors.py from the website's sponsor wall; edits here are overwritten -->
+<!-- supporters:start: written by scripts/update_sponsors.py from the website's thank-you wall; edits here are overwritten -->
 <p align="center">
-  <a href="https://www.wallpapermachine.app/#sponsors"><img src="https://www.wallpapermachine.app/sponsors/wall?v=f140e88eac71" width="100%" alt="WallpaperMachine Supporters: xwei12, umitsurumi, ReinforceZwei, hahagei2580, 你识认我, Yanami, LettuceWeng, Slikk878. 8 Supporters on the wall. 3 more support privately."></a>
+  <a href="https://www.wallpapermachine.app/#sponsors"><img src="https://www.wallpapermachine.app/sponsors/wall?v=02c7d939eeb2" width="100%" alt="WallpaperMachine Priority Support members: xwei12, umitsurumi, ReinforceZwei, hahagei2580, 你识认我, Yanami, LettuceWeng, Slikk878, 我懶得想, ZhuLegend, Muchacho Lindo, pardo. 12 Priority Support members on the wall. 6 more stay private."></a>
 </p>
 <!-- supporters:end -->
 
 ## License
 
-The source is offered under the GNU General Public License, version 2 only
-([LICENSE](LICENSE)). The vendored renderer is GPL-2.0-only and the app shell is
-derived from it; upstream code keeps its own copyright and license notices,
-recorded in [upstream/provenance.json](upstream/provenance.json). Every recipient
-keeps every right the GPL grants, whether or not they are a Supporter.
+The source is offered under the GNU General Public License, version 3 only
+([LICENSE](LICENSE)). Vendored third-party code keeps its own copyright and license notices,
+recorded in [ThirdParty/provenance.json](ThirdParty/provenance.json). Every recipient
+keeps every right the GPL grants, whether or not they buy Priority Support.
 
-**No binary is cleared for distribution yet.** Apache-2.0 components (MoltenVK,
-the Vulkan loader, SPIRV-Tools, parts of glslang and the vendored spirv_reflect)
-are in every build's link closure and are not compatible with GPLv2.
-[LICENSING.md](LICENSING.md) records the policy, the Supporter model, each
-component's license, the open blockers and what would resolve them. Workshop
+[LICENSING.md](LICENSING.md) is the account of where the code comes from, the license of
+each third-party component, Priority Support, and where the source of each download is. The
+Apache-2.0 and GPL-3.0 components the build used to link (MoltenVK, the Vulkan loader,
+SPIRV-Tools, glslang, the vendored spirv_reflect, and the spirv Rust crate) were removed
+on 2026-10-17 under the earlier GPL-2.0-only policy and are GPLv3-compatible. Workshop
 wallpapers belong to their creators, and scene resources come from a Wallpaper
 Engine you own; the app bundles neither.
 
@@ -317,10 +356,20 @@ Engine you own; the app bundles neither.
 
 - [linux.do](https://linux.do) —— Where possible begins
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=wallpapermachine%2Fwallpapermachine&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=wallpapermachine/wallpapermachine&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=wallpapermachine/wallpapermachine&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=wallpapermachine/wallpapermachine&type=date&legend=top-left" />
+ </picture>
+</a>
+
 <br>
 
 <p align="center">
-  <img src="WebUI/app-icons/day.png" width="72" alt="WallpaperMachine app icon">
+  <img src="App/Resources/Assets.xcassets/AppIconDay.imageset/day.png" width="72" alt="WallpaperMachine app icon">
 </p>
 
 <p align="center">
@@ -331,7 +380,7 @@ Engine you own; the app bundles neither.
 <p align="center">
   <sub>
     Made for a more personal Mac.<br>
-    An independent project. Not affiliated with Wallpaper Engine or Valve.<br>
+    A project of <a href="https://mmfoundation.dev/">MMFoundation</a>. Not affiliated with Wallpaper Engine or Valve.<br>
     Wallpapers shown: <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3632513108">千咲 · 不散的春之花</a> and <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3276911872">流萤 · 仲夏萤火之约</a> by 夜莺Night, <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3521337568">Cyberpunk: Edgerunner-Lucy</a> by 凉粥, <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3648679058">RedBull F1 2026</a> by a bad driver, <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3288938880">绝区零 · 艾莲乔</a> by BIGDEECK and <a href="https://steamcommunity.com/sharedfiles/filedetails/?id=3626305963">Into The Abyss</a> by Blloopy. All artwork rights remain with their owners.
   </sub>
 </p>
